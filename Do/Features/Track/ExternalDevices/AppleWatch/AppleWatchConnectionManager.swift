@@ -61,5 +61,18 @@ extension AppleWatchConnectionManager: WCSessionDelegate {
             self.isReachable = session.isReachable
         }
     }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String : Any], replyHandler: @escaping ([String : Any]) -> Void) {
+        if let request = message["request"] as? String, request == "authStatus" {
+            let status = CrossDeviceAuthManager.shared.getCachedAuthStatus()
+            replyHandler(status)
+            // Also trigger sync just in case
+            DispatchQueue.main.async {
+                CrossDeviceAuthManager.shared.syncTokensToWatch()
+            }
+        } else {
+            replyHandler(["error": "Unknown request"])
+        }
+    }
 }
 

@@ -19,7 +19,6 @@ struct WatchApp: App {
     @StateObject private var authService = WatchAuthService.shared
     @StateObject private var workoutCoordinator = WatchWorkoutCoordinator.shared
     
-    @State private var isAuthenticated = false
     @State private var isCheckingAuth = true
     
     init() {
@@ -38,7 +37,7 @@ struct WatchApp: App {
                             .foregroundColor(.gray)
                             .padding(.top, 8)
                     }
-                } else if isAuthenticated {
+                } else if authService.isAuthenticated {
                     // Main app content
                     WorkoutListView()
                         .environmentObject(connectivityManager)
@@ -119,7 +118,8 @@ struct WatchApp: App {
                 requestPermissions()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("WatchAuthStateChanged"))) { _ in
-                checkAuthentication()
+                print("⌚️ [WatchApp] Auth state changed notification received")
+                self.isCheckingAuth = false
             }
         }
     }
@@ -128,7 +128,6 @@ struct WatchApp: App {
         isCheckingAuth = true
         authService.requestLoginStatus { authenticated, _ in
             DispatchQueue.main.async {
-                self.isAuthenticated = authenticated
                 self.isCheckingAuth = false
                 if authenticated {
                     print("⌚️ [WatchApp] User is authenticated")

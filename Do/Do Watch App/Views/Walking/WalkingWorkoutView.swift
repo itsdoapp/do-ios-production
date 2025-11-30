@@ -8,7 +8,6 @@
 
 import SwiftUI
 import HealthKit
-import CoreLocation
 
 struct WalkingWorkoutView: View {
     @EnvironmentObject var workoutCoordinator: WatchWorkoutCoordinator
@@ -17,85 +16,61 @@ struct WalkingWorkoutView: View {
     @State private var metrics = WorkoutMetrics()
     @State private var isRunning = false
     @State private var timer: Timer?
-    @State private var steps: Int = 0
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Main metrics
+        ZStack {
+            AmbientBackground(color: .blue)
+            
+            VStack(spacing: 12) {
+                // Header
+                HStack {
+                    Image(systemName: "figure.walk")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    Text("WALKING")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+                
+                // Hero (Distance)
+                HeroMetric(
+                    value: metrics.formattedDistance().replacingOccurrences(of: " mi", with: "").replacingOccurrences(of: " km", with: ""),
+                    unit: metrics.formattedDistance().contains("mi") ? "MILES" : "KILOMETERS",
+                    color: .blue
+                )
+                
+                // Stats Grid
                 VStack(spacing: 8) {
-                    Text(metrics.formattedTime())
-                        .font(.system(size: 32, weight: .bold))
+                    HStack(spacing: 8) {
+                        StatBox(label: "TIME", value: metrics.formattedTime(), color: .white)
+                        StatBox(label: "PACE", value: metrics.formattedPace(), color: .white)
+                    }
                     
-                    Text(metrics.formattedDistance())
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundColor(.orange)
+                    HStack(spacing: 8) {
+                        StatBox(label: "HEART RATE", value: metrics.formattedHeartRate(), color: .red)
+                        StatBox(label: "CALORIES", value: metrics.formattedCalories(), color: .orange)
+                    }
                 }
-                .padding()
+                .padding(.horizontal)
                 
-                // Secondary metrics
-                HStack(spacing: 20) {
-                    VStack {
-                        Text("STEPS")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text("\(steps)")
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("HR")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedHeartRate())
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("PACE")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedPace())
-                            .font(.headline)
-                    }
-                }
-                .padding()
+                Spacer()
                 
-                // Control buttons
-                HStack(spacing: 20) {
-                    if isRunning {
-                        Button(action: pauseWorkout) {
-                            Image(systemName: "pause.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.orange)
-                                .clipShape(Circle())
-                        }
-                    } else {
-                        Button(action: startWorkout) {
-                            Image(systemName: "play.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.green)
-                                .clipShape(Circle())
-                        }
-                    }
-                    
-                    Button(action: stopWorkout) {
-                        Image(systemName: "stop.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 60, height: 60)
-                            .background(Color.red)
-                            .clipShape(Circle())
-                    }
-                }
-                .padding()
+                // Controls
+                WorkoutControls(
+                    isRunning: isRunning,
+                    onPause: pauseWorkout,
+                    onResume: startWorkout,
+                    onStop: stopWorkout,
+                    color: .blue
+                )
+                .padding(.bottom, 8)
             }
         }
-        .navigationTitle("Walking")
+        .navigationBarHidden(true)
         .onAppear {
             if let activeWorkout = workoutCoordinator.activeWorkout,
                activeWorkout.workoutType == .walking {
@@ -128,7 +103,6 @@ struct WalkingWorkoutView: View {
         LiveMetricsSync.shared.stopLiveSync()
     }
     
-    
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             updateMetrics()
@@ -143,7 +117,9 @@ struct WalkingWorkoutView: View {
     private func updateMetrics() {
         guard isRunning else { return }
         metrics.elapsedTime += 1.0
+        if metrics.distance > 0 {
+            metrics.pace = metrics.elapsedTime / metrics.distance
+        }
         workoutCoordinator.updateMetrics(metrics)
     }
 }
-

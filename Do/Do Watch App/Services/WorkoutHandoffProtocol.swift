@@ -24,6 +24,7 @@ enum WorkoutType: String, Codable {
     case swimming = "swimming"
     case sports = "sports"
     case gym = "gym"
+    case meditation = "meditation"
 }
 
 // MARK: - Handoff Message Structure

@@ -19,6 +19,7 @@ class CrossDeviceAuthManager: NSObject {
     
     private override init() {
         super.init()
+        print("📱 [CrossDeviceAuthManager] Initializing. Bundle ID: \(Bundle.main.bundleIdentifier ?? "unknown")")
         setupWatchConnectivity()
     }
     
@@ -39,9 +40,10 @@ class CrossDeviceAuthManager: NSObject {
     
     /// Sync current authentication tokens to watch
     func syncTokensToWatch() {
-        guard let session = session, session.isWatchAppInstalled else {
-            print("⚠️ [CrossDeviceAuthManager] Watch app not installed")
-            return
+        guard let session = session else { return }
+        
+        if !session.isWatchAppInstalled {
+            print("⚠️ [CrossDeviceAuthManager] Warning: session.isWatchAppInstalled is false. Attempting sync anyway...")
         }
         
         guard session.activationState == .activated else {
@@ -109,7 +111,7 @@ class CrossDeviceAuthManager: NSObject {
     }
     
     /// Get current authentication status
-    private func getCachedAuthStatus() -> [String: Any] {
+    func getCachedAuthStatus() -> [String: Any] {
         // Read from Keychain (primary source)
         let idToken = keychainManager.get(Constants.Keychain.idToken) ?? ""
         let accessToken = keychainManager.get(Constants.Keychain.accessToken) ?? ""

@@ -8,7 +8,6 @@
 
 import SwiftUI
 import HealthKit
-import CoreLocation
 
 struct SportsWorkoutView: View {
     @EnvironmentObject var workoutCoordinator: WatchWorkoutCoordinator
@@ -17,86 +16,54 @@ struct SportsWorkoutView: View {
     @State private var metrics = WorkoutMetrics()
     @State private var isRunning = false
     @State private var timer: Timer?
-    @State private var sportType: String = "Basketball"
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Main metrics
+        ZStack {
+            AmbientBackground(color: .red)
+            
+            VStack(spacing: 12) {
+                // Header
+                HStack {
+                    Image(systemName: "sportscourt")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                    Text("SPORTS")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+                
+                // Hero (Heart Rate)
+                HeroMetric(value: metrics.formattedHeartRate().replacingOccurrences(of: " bpm", with: ""), unit: "BPM", color: .red)
+                
+                // Stats Grid
                 VStack(spacing: 8) {
-                    Text(metrics.formattedTime())
-                        .font(.system(size: 32, weight: .bold))
+                    HStack(spacing: 8) {
+                        StatBox(label: "TIME", value: metrics.formattedTime(), color: .white)
+                        StatBox(label: "CALORIES", value: metrics.formattedCalories(), color: .orange)
+                    }
                     
-                    Text(metrics.formattedDistance())
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundColor(.orange)
+                    // Placeholder for other metrics if available, e.g., Points or Steps
                 }
-                .padding()
+                .padding(.horizontal)
                 
-                // Secondary metrics
-                HStack(spacing: 20) {
-                    VStack {
-                        Text("HR")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedHeartRate())
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("CAL")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedCalories())
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("SPORT")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(sportType)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                }
-                .padding()
+                Spacer()
                 
-                // Control buttons
-                HStack(spacing: 20) {
-                    if isRunning {
-                        Button(action: pauseWorkout) {
-                            Image(systemName: "pause.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.orange)
-                                .clipShape(Circle())
-                        }
-                    } else {
-                        Button(action: startWorkout) {
-                            Image(systemName: "play.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.green)
-                                .clipShape(Circle())
-                        }
-                    }
-                    
-                    Button(action: stopWorkout) {
-                        Image(systemName: "stop.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 60, height: 60)
-                            .background(Color.red)
-                            .clipShape(Circle())
-                    }
-                }
-                .padding()
+                // Controls
+                WorkoutControls(
+                    isRunning: isRunning,
+                    onPause: pauseWorkout,
+                    onResume: startWorkout,
+                    onStop: stopWorkout,
+                    color: .red
+                )
+                .padding(.bottom, 8)
             }
         }
-        .navigationTitle("Sports")
+        .navigationBarHidden(true)
         .onAppear {
             if let activeWorkout = workoutCoordinator.activeWorkout,
                activeWorkout.workoutType == .sports {
@@ -129,7 +96,6 @@ struct SportsWorkoutView: View {
         LiveMetricsSync.shared.stopLiveSync()
     }
     
-    
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             updateMetrics()
@@ -147,4 +113,3 @@ struct SportsWorkoutView: View {
         workoutCoordinator.updateMetrics(metrics)
     }
 }
-

@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		ABC100072ED8896100D4E146 /* WorkoutViewComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC100062ED8896100D4E146 /* WorkoutViewComponents.swift */; };
+		ABC100052ED8896100D4E146 /* MeditationCharacters.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC100042ED8896100D4E146 /* MeditationCharacters.swift */; };
+		ABC100022ED8896100D4E146 /* MeditationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABC100012ED8896100D4E146 /* MeditationView.swift */; };
 		0172B85BC7B443DB76AD8444 /* AllPostCells.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B2B84DADC69B3B8DEC510E /* AllPostCells.swift */; };
 		03158BC577F5A226E67C847B /* ambient_story_peaceful.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = E74CDE627327E325B1495AE3 /* ambient_story_peaceful.mp3 */; };
 		088D8F4D30F7989FB71427B4 /* ambient_zen_bowls.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 17815D0542EC9043431835BE /* ambient_zen_bowls.mp3 */; };
@@ -38,7 +41,7 @@
 		36D201522BD527DF0E04EDC6 /* TokenModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBD74670F53B8BF8940D898 /* TokenModels.swift */; };
 		38DCEDBB06BD118A64CDBB58 /* WalkTrackingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF490199F906385C1D459961 /* WalkTrackingEngine.swift */; };
 		39CDAB22C015541D0992A566 /* Color+Brand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB34045A8F3F059A6C641D7 /* Color+Brand.swift */; };
-		39E304897A3E2061991C28F1 /* Do.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5E8E913444C8470152FBF869 /* Do.app */; };
+		39E304897A3E2061991C28F1 /* Do Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 5E8E913444C8470152FBF869 /* Do Watch App.app */; };
 		3A6BF54C245B9909F7D501F3 /* OutdoorWalkViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2492FCF0769C082617352C /* OutdoorWalkViewController.swift */; };
 		3A80FA7332B4EF7F712D3B4B /* UserProfileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C9CBCCDE7F1F43892FC58FA /* UserProfileService.swift */; };
 		3E9A5FCBF7EF55C4B2FB99E8 /* ModernSportsTrackerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F34D0803B397D04B7C89F53B /* ModernSportsTrackerViewController.swift */; };
@@ -349,11 +352,11 @@
 /* Begin PBXCopyFilesBuildPhase section */
 		61F92E6D03768CC811E80DDA /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 8;
+			buildActionMask = 2147483647;
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
-				39E304897A3E2061991C28F1 /* Do.app in Embed Watch Content */,
+				39E304897A3E2061991C28F1 /* Do Watch App.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -361,6 +364,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		ABC100062ED8896100D4E146 /* WorkoutViewComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutViewComponents.swift; sourceTree = "<group>"; };
+		ABC100042ED8896100D4E146 /* MeditationCharacters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeditationCharacters.swift; sourceTree = "<group>"; };
+		ABC100012ED8896100D4E146 /* MeditationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeditationView.swift; sourceTree = "<group>"; };
 		018F43140BEE44B9FCD208E6 /* Pods_Do.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Do.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		0334587E3D4CCA065CB4FDF4 /* OutdoorBikeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutdoorBikeViewController.swift; sourceTree = "<group>"; };
 		03CED7459F573E5AB67DCF75 /* MeditationAudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeditationAudioService.swift; sourceTree = "<group>"; };
@@ -432,7 +438,7 @@
 		555FECFDA004225EF85D45AF /* NutritionBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionBadge.swift; sourceTree = "<group>"; };
 		577CC8C7684823F822488AE6 /* ambient_noise_white.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = ambient_noise_white.mp3; sourceTree = "<group>"; };
 		5E4B2C79D6D4D86532AF2DB9 /* NutritionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionService.swift; sourceTree = "<group>"; };
-		5E8E913444C8470152FBF869 /* Do.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Do.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5E8E913444C8470152FBF869 /* Do Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Do Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		6242D6CED98A1D92678D18B9 /* ambient_story_dreamy.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = ambient_story_dreamy.mp3; sourceTree = "<group>"; };
 		6703624812F10DB355D12E12 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		6ACB80C1723DBEA4E55A2072 /* WeatherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherService.swift; sourceTree = "<group>"; };
@@ -717,6 +723,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		ABC100032ED8896100D4E146 /* Meditation */ = {
+			isa = PBXGroup;
+			children = (
+				ABC100012ED8896100D4E146 /* MeditationView.swift */,
+			);
+			path = Meditation;
+			sourceTree = "<group>";
+		};
 		01A8A95AE259AA4678481D2A /* API */ = {
 			isa = PBXGroup;
 			children = (
@@ -812,7 +826,7 @@
 			isa = PBXGroup;
 			children = (
 				4E62FCD26FCCFD09C4DD78B7 /* Do.app */,
-				5E8E913444C8470152FBF869 /* Do.app */,
+				5E8E913444C8470152FBF869 /* Do Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -1352,13 +1366,15 @@
 			path = Biking;
 			sourceTree = "<group>";
 		};
-		90CF1C702ED8896100D4E146 /* Components */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Components;
-			sourceTree = "<group>";
-		};
+                90CF1C702ED8896100D4E146 /* Components */ = {
+                        isa = PBXGroup;
+                        children = (
+                                ABC100042ED8896100D4E146 /* MeditationCharacters.swift */,
+                                ABC100062ED8896100D4E146 /* WorkoutViewComponents.swift */,
+                        );
+                        path = Components;
+                        sourceTree = "<group>";
+                };
 		90CF1C722ED8896100D4E146 /* Gym */ = {
 			isa = PBXGroup;
 			children = (
@@ -1410,6 +1426,7 @@
 		90CF1C7E2ED8896100D4E146 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				ABC100032ED8896100D4E146 /* Meditation */,
 				90CF1C6F2ED8896100D4E146 /* Biking */,
 				90CF1C702ED8896100D4E146 /* Components */,
 				90CF1C722ED8896100D4E146 /* Gym */,
@@ -1871,7 +1888,7 @@
 			);
 			name = "Do Watch App";
 			productName = "Do Watch App";
-			productReference = 5E8E913444C8470152FBF869 /* Do.app */;
+			productReference = 5E8E913444C8470152FBF869 /* Do Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -2279,6 +2296,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				ABC100072ED8896100D4E146 /* WorkoutViewComponents.swift in Sources */,
+				ABC100052ED8896100D4E146 /* MeditationCharacters.swift in Sources */,
+				ABC100022ED8896100D4E146 /* MeditationView.swift in Sources */,
 				8AECAB75EF899E3D8339A0C5 /* WatchApp.swift in Sources */,
 				75BD1BCF7BA7ED7B676E79F8 /* WatchAuthService.swift in Sources */,
 				90FBDDBC2EDA59240024AE4A /* WatchMetricsSyncService.swift in Sources */,
@@ -2455,6 +2475,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = App/Do.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R8RJG8QJ4J;
@@ -2496,8 +2517,9 @@
 				INFOPLIST_FILE = "Do Watch App/Info.plist";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.do.fitness.watchapp;
+				PRODUCT_NAME = "Do Watch App";
 				SDKROOT = watchos;
-				SKIP_INSTALL = YES;
+				SKIP_INSTALL = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				VALIDATE_PRODUCT = YES;
@@ -2518,8 +2540,9 @@
 				INFOPLIST_FILE = "Do Watch App/Info.plist";
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.do.fitness.watchapp;
+				PRODUCT_NAME = "Do Watch App";
 				SDKROOT = watchos;
-				SKIP_INSTALL = YES;
+				SKIP_INSTALL = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 4;
 				WATCHOS_DEPLOYMENT_TARGET = 11.0;
@@ -2533,6 +2556,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = App/Do.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = R8RJG8QJ4J;
@@ -2558,6 +2582,8 @@
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+				ONLY_ACTIVE_ARCH = YES;
+				DEPLOYMENT_LOCATION = NO;
 			};
 			name = Debug;
 		};

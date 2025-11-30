@@ -15,7 +15,7 @@ class WatchAuthService: NSObject, ObservableObject {
     static let shared = WatchAuthService()
     
     private var session: WCSession?
-    private let userDefaults = UserDefaults(suiteName: "group.com.itsdoapp.doios")
+    private let userDefaults = UserDefaults(suiteName: "group.com.do.fitness")
     private let connectivityManager = WatchConnectivityManager.shared
     
     private let authTokenKey = "cognito_id_token"
@@ -38,6 +38,7 @@ class WatchAuthService: NSObject, ObservableObject {
     
     override init() {
         super.init()
+        print("⌚️ [WatchAuthService] Initializing. Bundle ID: \(Bundle.main.bundleIdentifier ?? "unknown")")
         // Check initial authentication status
         isAuthenticated = userDefaults?.string(forKey: authTokenKey) != nil
         setupWatchConnectivity()
@@ -155,7 +156,7 @@ class WatchAuthService: NSObject, ObservableObject {
     }
     
     /// Perform the actual authentication check (called after session is activated)
-    private func performAuthCheck(completion: @escaping (Bool, [String: Any]?) -> Void) {
+    private func performAuthCheck(retryCount: Int = 0, completion: @escaping (Bool, [String: Any]?) -> Void) {
         guard let session = session, session.activationState == .activated else {
             // Fallback to cached tokens
             let cached = self.getCachedTokens()
@@ -182,6 +183,16 @@ class WatchAuthService: NSObject, ObservableObject {
                 }
             }, errorHandler: { error in
                 print("❌ [WatchAuthService] Error requesting login status: \(error.localizedDescription)")
+                
+                // Retry on failure (e.g. timeout) up to 2 times
+                if retryCount < 2 {
+                    print("🔄 [WatchAuthService] Retrying auth check (attempt \(retryCount + 1))...")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self.performAuthCheck(retryCount: retryCount + 1, completion: completion)
+                    }
+                    return
+                }
+                
                 DispatchQueue.main.async {
                     // Fallback to cached tokens
                     let cached = self.getCachedTokens()

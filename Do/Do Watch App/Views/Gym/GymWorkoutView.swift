@@ -29,112 +29,65 @@ struct GymWorkoutView: View {
     @State private var setWeight: Double = 0
     
     var body: some View {
-        ScrollView {
+        ZStack {
+            AmbientBackground(color: .purple)
+            
             VStack(spacing: 12) {
-                // Session name
-                Text(sessionName)
-                    .font(.headline)
-                    .foregroundColor(.orange)
+                // Header
+                HStack {
+                    Image(systemName: "figure.strengthtraining.traditional")
+                        .font(.caption)
+                        .foregroundColor(.purple)
+                    Text(sessionName.uppercased())
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
                 
-                // Time
-                Text(formatTime(elapsedTime))
-                    .font(.system(size: 24, weight: .bold))
+                // Hero (Time)
+                HeroMetric(value: formatTime(elapsedTime), unit: "DURATION", color: .white)
                 
-                // Stats row
-                HStack(spacing: 16) {
-                    VStack {
-                        Text("VOLUME")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                        Text(formatVolume(totalVolume))
-                            .font(.caption)
-                            .fontWeight(.semibold)
+                // Stats
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        StatBox(label: "VOLUME", value: formatVolume(totalVolume), color: .purple)
+                        StatBox(label: "SETS", value: "\(currentSet)", color: .purple)
                     }
                     
-                    VStack {
-                        Text("REPS")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                        Text("\(totalReps)")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    
-                    VStack {
-                        Text("HR")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                        Text("\(Int(heartRate))")
-                            .font(.caption)
-                            .fontWeight(.semibold)
+                    HStack(spacing: 8) {
+                        StatBox(label: "REPS", value: "\(totalReps)", color: .white)
+                        StatBox(label: "HEART RATE", value: "\(Int(heartRate))", color: .red)
                     }
                 }
-                .padding(.vertical, 8)
+                .padding(.horizontal)
                 
-                // Current movement
                 if let movement = currentMovement {
-                    VStack(spacing: 4) {
-                        Text("CURRENT")
-                            .font(.caption2)
-                            .foregroundColor(.gray)
-                        Text(movement)
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                        if currentSet > 0 {
-                            Text("Set \(currentSet)")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
-                        }
-                    }
-                    .padding()
-                    .background(Color.gray.opacity(0.2))
-                    .cornerRadius(8)
+                    Text(movement.uppercased())
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.purple)
+                        .padding(.top, 4)
                 }
                 
-                // Control buttons
-                HStack(spacing: 20) {
-                    if isTracking {
-                        Button(action: pauseWorkout) {
-                            Image(systemName: "pause.fill")
-                                .font(.title3)
-                                .foregroundColor(.white)
-                                .frame(width: 50, height: 50)
-                                .background(Color.orange)
-                                .clipShape(Circle())
-                        }
-                    } else {
-                        Button(action: startWorkout) {
-                            Image(systemName: "play.fill")
-                                .font(.title3)
-                                .foregroundColor(.white)
-                                .frame(width: 50, height: 50)
-                                .background(Color.green)
-                                .clipShape(Circle())
-                        }
-                    }
-                    
-                    Button(action: logSet) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
-                            .background(Color.blue)
-                            .clipShape(Circle())
-                    }
-                    
-                    Button(action: stopWorkout) {
-                        Image(systemName: "stop.fill")
-                            .font(.title3)
-                            .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
-                            .background(Color.red)
-                            .clipShape(Circle())
-                    }
-                }
-                .padding()
+                Spacer()
+                
+                // Controls
+                WorkoutControls(
+                    isRunning: isTracking,
+                    onPause: pauseWorkout,
+                    onResume: startWorkout,
+                    onStop: stopWorkout,
+                    color: .purple,
+                    customAction: logSet,
+                    customIcon: "plus"
+                )
+                .padding(.bottom, 8)
             }
         }
-        .navigationTitle("Gym")
+        .navigationBarHidden(true)
         .sheet(isPresented: $showingSetInput) {
             SetInputView(reps: $setReps, weight: $setWeight, onSave: {
                 saveSet()
@@ -198,6 +151,7 @@ struct GymWorkoutView: View {
         // Update local totals
         totalVolume += setWeight * Double(setReps)
         totalReps += setReps
+        currentSet += 1
         
         // Reset input
         setReps = 0
@@ -218,23 +172,25 @@ struct GymWorkoutView: View {
     
     private func requestWorkoutState() {
         connectivityManager.sendMessage(["request": "gymWorkoutState"]) { response in
-            if let isTracking = response["isTracking"] as? Bool {
-                self.isTracking = isTracking
-            }
-            if let elapsedTime = response["elapsedTime"] as? TimeInterval {
-                self.elapsedTime = elapsedTime
-            }
-            if let totalVolume = response["totalVolume"] as? Double {
-                self.totalVolume = totalVolume
-            }
-            if let totalReps = response["totalReps"] as? Int {
-                self.totalReps = totalReps
-            }
-            if let heartRate = response["heartRate"] as? Double {
-                self.heartRate = heartRate
-            }
-            if let currentMovement = response["currentMovement"] as? String {
-                self.currentMovement = currentMovement
+            DispatchQueue.main.async {
+                if let isTracking = response["isTracking"] as? Bool {
+                    self.isTracking = isTracking
+                }
+                if let elapsedTime = response["elapsedTime"] as? TimeInterval {
+                    self.elapsedTime = elapsedTime
+                }
+                if let totalVolume = response["totalVolume"] as? Double {
+                    self.totalVolume = totalVolume
+                }
+                if let totalReps = response["totalReps"] as? Int {
+                    self.totalReps = totalReps
+                }
+                if let heartRate = response["heartRate"] as? Double {
+                    self.heartRate = heartRate
+                }
+                if let currentMovement = response["currentMovement"] as? String {
+                    self.currentMovement = currentMovement
+                }
             }
         }
     }
@@ -269,37 +225,54 @@ struct SetInputView: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Log Set")
-                .font(.headline)
-            
-            // Reps input
-            VStack {
-                Text("Reps")
-                    .font(.caption)
-                Stepper(value: $reps, in: 0...100) {
-                    Text("\(reps)")
-                        .font(.title2)
+        ScrollView {
+            VStack(spacing: 16) {
+                Text("Log Set")
+                    .font(.headline)
+                    .foregroundColor(.purple)
+                
+                // Reps input
+                VStack {
+                    Text("REPS")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Stepper(value: $reps, in: 0...100) {
+                        Text("\(reps)")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                    }
                 }
-            }
-            
-            // Weight input
-            VStack {
-                Text("Weight (lbs)")
-                    .font(.caption)
-                Stepper(value: $weight, in: 0...1000, step: 5) {
-                    Text("\(Int(weight))")
-                        .font(.title2)
+                .padding()
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(16)
+                
+                // Weight input
+                VStack {
+                    Text("WEIGHT (LBS)")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Stepper(value: $weight, in: 0...1000, step: 5) {
+                        Text("\(Int(weight))")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                    }
                 }
+                .padding()
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(16)
+                
+                Button(action: {
+                    onSave()
+                    dismiss()
+                }) {
+                    Text("SAVE SET")
+                        .fontWeight(.bold)
+                }
+                .tint(.purple)
+                .padding(.top, 8)
             }
-            
-            Button("Save") {
-                onSave()
-                dismiss()
-            }
-            .buttonStyle(.borderedProminent)
         }
-        .padding()
     }
 }
-

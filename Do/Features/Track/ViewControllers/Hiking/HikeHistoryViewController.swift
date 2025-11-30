@@ -221,3 +221,4 @@ struct HikeLogCard: View {
 
 
 
+

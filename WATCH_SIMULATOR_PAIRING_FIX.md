@@ -144,3 +144,4 @@ xcrun simctl io booted logverbose enable --subsystem=com.apple.WatchConnectivity
 Then check Xcode console for WatchConnectivity logs.
 
 
+

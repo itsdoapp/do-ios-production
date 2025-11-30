@@ -20,91 +20,57 @@ struct SwimmingWorkoutView: View {
     @State private var poolLength: Double = 25.0 // meters
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Main metrics
+        ZStack {
+            AmbientBackground(color: .cyan)
+            
+            VStack(spacing: 12) {
+                // Header
+                HStack {
+                    Image(systemName: "figure.pool.swim")
+                        .font(.caption)
+                        .foregroundColor(.cyan)
+                    Text("SWIMMING")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+                
+                // Hero (Laps)
+                HeroMetric(value: "\(laps)", unit: "LAPS", color: .white)
+                
+                // Stats Grid
                 VStack(spacing: 8) {
-                    Text(metrics.formattedTime())
-                        .font(.system(size: 32, weight: .bold))
+                    HStack(spacing: 8) {
+                        StatBox(label: "DISTANCE", value: formatDistance(metrics.distance), color: .cyan)
+                        StatBox(label: "TIME", value: metrics.formattedTime(), color: .white)
+                    }
                     
-                    Text(formatDistance(metrics.distance))
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundColor(.orange)
+                    HStack(spacing: 8) {
+                        StatBox(label: "HEART RATE", value: metrics.formattedHeartRate(), color: .red)
+                        StatBox(label: "PACE/100m", value: formatPacePer100m(metrics.pace), color: .cyan)
+                    }
                 }
-                .padding()
+                .padding(.horizontal)
                 
-                // Secondary metrics
-                HStack(spacing: 20) {
-                    VStack {
-                        Text("LAPS")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text("\(laps)")
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("HR")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedHeartRate())
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("PACE")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(formatPacePer100m(metrics.pace))
-                            .font(.headline)
-                    }
-                }
-                .padding()
+                Spacer()
                 
-                // Control buttons
-                HStack(spacing: 20) {
-                    if isRunning {
-                        Button(action: pauseWorkout) {
-                            Image(systemName: "pause.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.orange)
-                                .clipShape(Circle())
-                        }
-                    } else {
-                        Button(action: startWorkout) {
-                            Image(systemName: "play.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.green)
-                                .clipShape(Circle())
-                        }
-                    }
-                    
-                    Button(action: logLap) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 60, height: 60)
-                            .background(Color.blue)
-                            .clipShape(Circle())
-                    }
-                    
-                    Button(action: stopWorkout) {
-                        Image(systemName: "stop.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 60, height: 60)
-                            .background(Color.red)
-                            .clipShape(Circle())
-                    }
-                }
-                .padding()
+                // Controls
+                WorkoutControls(
+                    isRunning: isRunning,
+                    onPause: pauseWorkout,
+                    onResume: startWorkout,
+                    onStop: stopWorkout,
+                    color: .cyan,
+                    customAction: logLap,
+                    customIcon: "plus"
+                )
+                .padding(.bottom, 8)
             }
         }
-        .navigationTitle("Swimming")
+        .navigationBarHidden(true)
         .onAppear {
             if let activeWorkout = workoutCoordinator.activeWorkout,
                activeWorkout.workoutType == .swimming {
@@ -182,4 +148,3 @@ struct SwimmingWorkoutView: View {
         return String(format: "%d'%02d\"", minutes, seconds)
     }
 }
-

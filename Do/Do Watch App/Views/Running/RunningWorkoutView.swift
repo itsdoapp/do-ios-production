@@ -17,86 +17,73 @@ struct RunningWorkoutView: View {
     @State private var metrics = WorkoutMetrics()
     @State private var isRunning = false
     @State private var timer: Timer?
+    @State private var liveIndicatorOpacity: Double = 1.0
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Main metrics
-                VStack(spacing: 8) {
-                    Text(metrics.formattedTime())
-                        .font(.system(size: 32, weight: .bold))
-                    
-                    Text(metrics.formattedDistance())
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundColor(.orange)
-                }
-                .padding()
-                
-                // Secondary metrics
-                HStack(spacing: 20) {
-                    VStack {
-                        Text("PACE")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedPace())
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("HR")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedHeartRate())
-                            .font(.headline)
-                    }
-                    
-                    VStack {
-                        Text("CAL")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(metrics.formattedCalories())
-                            .font(.headline)
-                    }
-                }
-                .padding()
-                
-                // Control buttons
-                HStack(spacing: 20) {
+        ZStack {
+            AmbientBackground(color: Color.brandOrange)
+            
+            VStack(spacing: 12) {
+                // Header
+                HStack {
+                    Image(systemName: "figure.run")
+                        .font(.caption)
+                        .foregroundColor(Color.brandOrange)
+                    Text("RUNNING")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.gray)
+                    Spacer()
                     if isRunning {
-                        Button(action: pauseWorkout) {
-                            Image(systemName: "pause.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.orange)
-                                .clipShape(Circle())
-                        }
-                    } else {
-                        Button(action: startWorkout) {
-                            Image(systemName: "play.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .frame(width: 60, height: 60)
-                                .background(Color.green)
-                                .clipShape(Circle())
-                        }
-                    }
-                    
-                    Button(action: stopWorkout) {
-                        Image(systemName: "stop.fill")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .frame(width: 60, height: 60)
-                            .background(Color.red)
-                            .clipShape(Circle())
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 6, height: 6)
+                            .opacity(liveIndicatorOpacity)
+                            .onAppear {
+                                withAnimation(.easeInOut(duration: 1).repeatForever()) {
+                                    liveIndicatorOpacity = 0.2
+                                }
+                            }
                     }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.top, 4)
                 
-                // Handoff is now automatic - no manual button needed
+                // Hero Metric (Distance)
+                HeroMetric(
+                    value: metrics.formattedDistance().replacingOccurrences(of: " mi", with: "").replacingOccurrences(of: " km", with: ""),
+                    unit: metrics.formattedDistance().contains("mi") ? "MILES" : "KILOMETERS",
+                    color: Color.brandOrange
+                )
+                
+                // Stats Grid
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        StatBox(label: "TIME", value: metrics.formattedTime(), color: .white)
+                        StatBox(label: "PACE", value: metrics.formattedPace(), color: .white)
+                    }
+                    
+                    HStack(spacing: 8) {
+                        StatBox(label: "HEART RATE", value: metrics.formattedHeartRate(), color: .red)
+                        StatBox(label: "CALORIES", value: metrics.formattedCalories(), color: .orange)
+                    }
+                }
+                .padding(.horizontal)
+                
+                Spacer()
+                
+                // Controls
+                WorkoutControls(
+                    isRunning: isRunning,
+                    onPause: pauseWorkout,
+                    onResume: startWorkout,
+                    onStop: stopWorkout,
+                    color: Color.brandOrange
+                )
+                .padding(.bottom, 8)
             }
         }
-        .navigationTitle("Running")
+        .navigationBarHidden(true)
         .onAppear {
             if let activeWorkout = workoutCoordinator.activeWorkout,
                activeWorkout.workoutType == .running {
@@ -156,4 +143,3 @@ struct RunningWorkoutView: View {
         workoutCoordinator.updateMetrics(metrics)
     }
 }
-
