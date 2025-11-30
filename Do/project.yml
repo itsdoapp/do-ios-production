@@ -1,0 +1,82 @@
+name: Do
+options:
+  bundleIdPrefix: com.do
+  deploymentTarget:
+    iOS: 16.0
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: 2.0.0
+    CURRENT_PROJECT_VERSION: 1
+    PRODUCT_NAME: Do
+    SWIFT_VERSION: 5.0
+    TARGETED_DEVICE_FAMILY: 1
+    SUPPORTS_MACCATALYST: false
+    ENABLE_BITCODE: NO
+    IPHONEOS_DEPLOYMENT_TARGET: 16.0
+
+targets:
+  Do:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    
+    sources:
+      - path: App
+      - path: Core
+      - path: Features
+      - path: Common
+      - path: Assets.xcassets
+      - path: Resources/Audio
+        name: Audio
+        type: group
+    
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Do
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        UILaunchScreen:
+          UIColorName: LaunchScreenColor
+    
+    settings:
+      base:
+        INFOPLIST_FILE: App/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.do.fitness
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: 5.0
+        ENABLE_BITCODE: NO
+        OTHER_LDFLAGS: $(inherited) -ObjC
+        CLANG_ENABLE_MODULES: YES
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/Frameworks
+      debug:
+        SWIFT_OPTIMIZATION_LEVEL: -Onone
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      release:
+        SWIFT_OPTIMIZATION_LEVEL: -O
+        SWIFT_COMPILATION_MODE: wholemodule
+    
+    preBuildScripts:
+      - script: |
+          if [ -f "${PODS_ROOT}/Target Support Files/Pods-Do/Pods-Do-frameworks.sh" ]; then
+            "${PODS_ROOT}/Target Support Files/Pods-Do/Pods-Do-frameworks.sh"
+          fi
+        name: "[CP] Embed Pods Frameworks"
+        inputFiles:
+          - "${PODS_ROOT}/Target Support Files/Pods-Do/Pods-Do-frameworks.sh"
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+    
+    scheme:
+      testTargets: []
+      gatherCoverageData: false

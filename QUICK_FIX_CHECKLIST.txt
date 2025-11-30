@@ -1,0 +1,111 @@
+================================================================================
+  QUICK FIX CHECKLIST - Do iOS App
+================================================================================
+
+✅ ALL CODE ERRORS FIXED - No linter errors!
+
+🔧 COCOAPODS FIX APPLIED - Xcode now opening with Do.xcworkspace
+
+⚠️  ACTION REQUIRED: Add files to Xcode project
+
+--------------------------------------------------------------------------------
+STEP 1: ADD NEW FILES TO XCODE
+--------------------------------------------------------------------------------
+
+Open Xcode and drag these 6 files into the project:
+
+  📁 Do/Features/Track/Models/
+     • RunAnalysisHelpers.swift
+     • BikingTypes.swift
+     • GymInsightsModels.swift
+
+  📁 Do/Features/Track/Extensions/
+     • UnitSpeedExtensions.swift
+
+  📁 Do/Core/Services/
+     • WaterIntakeService.swift
+
+  📁 Do/Features/Track/Managers/
+     • RunningWorkoutManager.swift
+
+When prompted:
+  ✅ Add to targets: "Do" (iOS app)
+  ❌ Copy items if needed: UNCHECKED
+
+--------------------------------------------------------------------------------
+STEP 2: FIX @main ATTRIBUTE CONFLICT
+--------------------------------------------------------------------------------
+
+Select WatchApp.swift in Xcode:
+  • Open File Inspector (right sidebar)
+  • Target Membership section:
+    ❌ "Do" (iOS) = UNCHECKED
+    ✅ "Do Watch App" = CHECKED
+
+Select AppDelegate.swift:
+  • Target Membership:
+    ✅ "Do" (iOS) = CHECKED
+    ❌ "Do Watch App" = UNCHECKED
+
+--------------------------------------------------------------------------------
+STEP 3: VERIFY WORKSPACE (IMPORTANT!)
+--------------------------------------------------------------------------------
+
+Xcode should now show in the title bar:
+  ✅ "Do — Do.xcworkspace" (CORRECT)
+  ❌ "Do — Do.xcodeproj" (WRONG - causes CocoaPods errors)
+
+If title shows .xcodeproj:
+  • Close Xcode
+  • Run: ./fix_and_open.sh
+  • Or manually open Do.xcworkspace (not Do.xcodeproj)
+
+--------------------------------------------------------------------------------
+STEP 4: CLEAN & BUILD
+--------------------------------------------------------------------------------
+
+  1. Clean Build Folder:     Cmd + Shift + K
+  2. Clean Derived Data:      Preferences → Locations → Delete Derived Data
+  3. Build:                   Cmd + B
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+
+After completing steps:
+  ✅ Project builds successfully
+  ✅ No "Cannot find type 'CategoryStats'" error
+  ✅ No "@main attribute" error
+  ✅ All 6 files visible in Project Navigator
+
+--------------------------------------------------------------------------------
+TYPES CREATED TODAY
+--------------------------------------------------------------------------------
+
+Run Analysis:
+  • TreadmillImageData
+  • MulticolorPolyline
+  • RunVideoPreviewViewController
+
+Extensions:
+  • UnitSpeed.minutesPerKilometer
+  • UnitSpeed.minutesPerMile
+
+Services:
+  • WaterIntakeService
+
+Models:
+  • BikeType, IndoorBikeLog
+  • WorkoutGap, WorkoutRecommendation
+  • ParticipantStatus, CategoryStats
+  • MealType (typealias)
+  • MapViewMode (consolidated)
+  • SplitTime (consolidated)
+
+Managers:
+  • RunningWorkoutManager
+
+================================================================================
+Questions? Check XCODE_INTEGRATION_GUIDE.md for detailed instructions
+================================================================================
+

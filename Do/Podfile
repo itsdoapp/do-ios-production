@@ -1,0 +1,36 @@
+platform :ios, '16.0'
+use_frameworks!
+
+project 'Do.xcodeproj'
+
+target 'Do' do
+  # AWS Authentication
+  pod 'AWSCognitoIdentityProvider', '~> 2.33.0'
+  pod 'AWSCore', '~> 2.33.0'
+  
+  # Social Login
+  pod 'GoogleSignIn', '~> 7.0'
+  
+  # Networking
+  pod 'Alamofire', '~> 5.8'
+  
+  # UI Components
+  pod 'SkeletonView'
+  pod 'lottie-ios'
+  pod 'NotificationBannerSwift'
+  
+  # Payment
+  pod 'StripePaymentSheet'
+  
+  # Analytics & Monitoring
+  pod 'Bugsnag'
+  
+  post_install do |installer|
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+        config.build_settings['BUILD_LIBRARY_FOR_DISTRIBUTION'] = 'YES'
+      end
+    end
+  end
+end
