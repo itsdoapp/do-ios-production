@@ -903,6 +903,32 @@ class GenieAPIService: ObservableObject {
         return try JSONDecoder().decode(SubscriptionStatusResponse.self, from: data)
     }
     
+    // Fetch subscription prices and Stripe price IDs from backend
+    // TODO: Implement backend endpoint /subscriptions/prices that returns:
+    // { tiers: [{ tier: "Athlete", monthlyPrice: 9.99, annualPrice: 99.90, monthlyPriceId: "price_xxx", annualPriceId: "price_yyy" }, ...] }
+    func getSubscriptionPrices() async throws -> [SubscriptionTierPrice] {
+        guard let url = URL(string: "\(baseURL)/subscriptions/prices") else {
+            throw GenieError.invalidURL
+        }
+        let token = try await getAuthToken()
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GenieError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            // If endpoint doesn't exist yet, return empty array (fallback to hardcoded prices)
+            print("⚠️ [API] Subscription prices endpoint not available (status: \(httpResponse.statusCode)), using hardcoded prices")
+            return []
+        }
+        
+        return try JSONDecoder().decode([SubscriptionTierPrice].self, from: data)
+    }
+    
     // Create SetupIntent for Stripe PaymentSheet
     func createSetupIntent() async throws -> SetupIntentResponse {
         guard let url = URL(string: "\(baseURL)/subscriptions/setup-intent") else {

@@ -94,6 +94,101 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
             name: Notification.Name("OpenPlanById"),
             object: nil
         )
+        
+        // Observe create/update notifications to refresh data
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMovementCreated(_:)),
+            name: Notification.Name("MovementCreated"),
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMovementUpdated(_:)),
+            name: Notification.Name("MovementUpdated"),
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSessionCreated(_:)),
+            name: Notification.Name("SessionCreated"),
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSessionUpdated(_:)),
+            name: Notification.Name("SessionUpdated"),
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePlanCreated(_:)),
+            name: Notification.Name("PlanCreated"),
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePlanUpdated(_:)),
+            name: Notification.Name("PlanUpdated"),
+            object: nil
+        )
+    }
+    
+    @objc private func handleMovementCreated(_ notification: Notification) {
+        print("🔄 [GymTracker] Movement created, refreshing data...")
+        // Refresh the SwiftUI view
+        if let hostingController = hostingController,
+           let gymTrackerView = hostingController.rootView as? GymTrackerView {
+            // Trigger a refresh by reloading featured content
+            Task { @MainActor in
+                await gymTrackerView.loadFeaturedContent()
+            }
+        }
+    }
+    
+    @objc private func handleMovementUpdated(_ notification: Notification) {
+        print("🔄 [GymTracker] Movement updated, refreshing data...")
+        handleMovementCreated(notification)
+    }
+    
+    @objc private func handleSessionCreated(_ notification: Notification) {
+        print("🔄 [GymTracker] Session created, refreshing data...")
+        // Refresh the SwiftUI view
+        if let hostingController = hostingController,
+           let gymTrackerView = hostingController.rootView as? GymTrackerView {
+            // Trigger a refresh by reloading personalized content
+            Task { @MainActor in
+                await gymTrackerView.loadPersonalizedContent()
+            }
+        }
+    }
+    
+    @objc private func handleSessionUpdated(_ notification: Notification) {
+        print("🔄 [GymTracker] Session updated, refreshing data...")
+        handleSessionCreated(notification)
+    }
+    
+    @objc private func handlePlanCreated(_ notification: Notification) {
+        print("🔄 [GymTracker] Plan created, refreshing data...")
+        // Refresh the SwiftUI view
+        if let hostingController = hostingController,
+           let gymTrackerView = hostingController.rootView as? GymTrackerView {
+            // Trigger a refresh by reloading personalized content and today's workout
+            Task { @MainActor in
+                await gymTrackerView.loadPersonalizedContent()
+                await gymTrackerView.loadTodayWorkout()
+            }
+        }
+    }
+    
+    @objc private func handlePlanUpdated(_ notification: Notification) {
+        print("🔄 [GymTracker] Plan updated, refreshing data...")
+        handlePlanCreated(notification)
     }
     
     // MARK: - Deep Link Handlers
@@ -149,7 +244,32 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
         AWSWorkoutService.shared.getMovements(userId: userId, limit: 1000) { [weak self] userResult in
             DispatchQueue.main.async {
                 switch userResult {
-                case .success(let items):
+                case .success(let response):
+                    guard let items = response.data else {
+                        // Try public movements
+                        AWSWorkoutService.shared.getMovements(userId: nil, isPublic: true, limit: 1000) { [weak self] publicResult in
+                            DispatchQueue.main.async {
+                                switch publicResult {
+                                case .success(let publicResponse):
+                                    if let item = publicResponse.data?.first(where: { $0.movementId == movementId }) {
+                                        guard let strongSelf = self else { return }
+                                        let movement = strongSelf.convertToMovement(from: item)
+                                        if !movement.id.isEmpty {
+                                            strongSelf.showExerciseDetail(movement)
+                                        } else {
+                                            strongSelf.showErrorAlert(message: "Workout not found")
+                                        }
+                                    } else {
+                                        self?.showErrorAlert(message: "Workout not found")
+                                    }
+                                case .failure(let error):
+                                    print("❌ [DeepLink] Error fetching movement: \(error.localizedDescription)")
+                                    self?.showErrorAlert(message: "Unable to load workout. Please try again.")
+                                }
+                            }
+                        }
+                        return
+                    }
                     // Find the movement with matching ID
                     if let item = items.first(where: { $0.movementId == movementId }) {
                         loadingAlert.dismiss(animated: true) {
@@ -172,8 +292,8 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
                     DispatchQueue.main.async {
                         loadingAlert.dismiss(animated: true) {
                             switch publicResult {
-                            case .success(let items):
-                                if let item = items.first(where: { $0.movementId == movementId }) {
+                            case .success(let publicResponse):
+                                if let item = publicResponse.data?.first(where: { $0.movementId == movementId }) {
                                     guard let strongSelf = self else { return }
                                     let movement = strongSelf.convertToMovement(from: item)
                                     if !movement.id.isEmpty {
@@ -211,7 +331,33 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
         AWSWorkoutService.shared.getSessions(userId: userId, limit: 1000) { [weak self] userResult in
             DispatchQueue.main.async {
                 switch userResult {
-                case .success(let items):
+                case .success(let response):
+                    guard let items = response.data else {
+                        // Try public sessions
+                        AWSWorkoutService.shared.getSessions(userId: nil, isPublic: true, limit: 1000) { [weak self] publicResult in
+                            DispatchQueue.main.async {
+                                loadingAlert.dismiss(animated: true) {
+                                    switch publicResult {
+                                    case .success(let publicResponse):
+                                        if let item = publicResponse.data?.first(where: { $0.sessionId == sessionId }) {
+                                            guard let strongSelf = self else { return }
+                                            if let session = strongSelf.convertToWorkoutSession(from: item, userId: userId ?? "") {
+                                                strongSelf.showSessionDetail(session)
+                                            } else {
+                                                strongSelf.showErrorAlert(message: "Workout session not found")
+                                            }
+                                        } else {
+                                            self?.showErrorAlert(message: "Workout session not found")
+                                        }
+                                    case .failure(let error):
+                                        print("❌ [DeepLink] Error fetching session: \(error.localizedDescription)")
+                                        self?.showErrorAlert(message: "Unable to load workout session. Please try again.")
+                                    }
+                                }
+                            }
+                        }
+                        return
+                    }
                     if let item = items.first(where: { $0.sessionId == sessionId }) {
                         loadingAlert.dismiss(animated: true) {
                             guard let strongSelf = self else { return }
@@ -232,8 +378,8 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
                     DispatchQueue.main.async {
                         loadingAlert.dismiss(animated: true) {
                             switch publicResult {
-                            case .success(let items):
-                                if let item = items.first(where: { $0.sessionId == sessionId }) {
+                            case .success(let publicResponse):
+                                if let item = publicResponse.data?.first(where: { $0.sessionId == sessionId }) {
                                     guard let strongSelf = self else { return }
                                     if let session = strongSelf.convertToWorkoutSession(from: item, userId: userId ?? "") {
                                         strongSelf.showSessionDetail(session)
@@ -270,7 +416,11 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
             DispatchQueue.main.async {
                 loadingAlert.dismiss(animated: true) {
                     switch result {
-                    case .success(let items):
+                    case .success(let response):
+                        guard let items = response.data else {
+                            self?.showErrorAlert(message: "Workout plan not found")
+                            return
+                        }
                         // Find the plan with matching ID
                         if let item = items.first(where: { $0.planId == planId }) {
                             guard let strongSelf = self else { return }
@@ -886,7 +1036,62 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
             AWSWorkoutService.shared.getMovements(userId: userId, limit: 1000) { [weak self] userResult in
                 DispatchQueue.main.async {
                     switch userResult {
-                    case .success(let items):
+                    case .success(let response):
+                        guard let items = response.data else {
+                            // Try public movements
+                            AWSWorkoutService.shared.getMovements(userId: nil, isPublic: true, limit: 1000) { [weak self] publicResult in
+                                DispatchQueue.main.async {
+                                    switch publicResult {
+                                    case .success(let publicResponse):
+                                        if let item = publicResponse.data?.first(where: { $0.movementId == movementId }) {
+                                            guard let strongSelf = self else { return }
+                                            let movementWithSets = strongSelf.convertToMovement(from: item)
+                                            
+                                            let hostingController = UIHostingController(rootView: ExerciseDetailView(exercise: movementWithSets, viewModel: strongSelf))
+                                            hostingController.modalPresentationStyle = UIModalPresentationStyle.pageSheet
+                                            hostingController.view.backgroundColor = UIColor.clear
+                                            
+                                            if let topVC = strongSelf.topMostViewController() {
+                                                topVC.present(hostingController, animated: true)
+                                            } else if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                               let window = windowScene.windows.first,
+                                               let rootVC = window.rootViewController {
+                                                rootVC.present(hostingController, animated: true)
+                                            }
+                                        } else {
+                                            // Fallback to showing without sets
+                                            guard let strongSelf = self else { return }
+                                            let hostingController = UIHostingController(rootView: ExerciseDetailView(exercise: exercise, viewModel: strongSelf))
+                                            hostingController.modalPresentationStyle = UIModalPresentationStyle.pageSheet
+                                            hostingController.view.backgroundColor = UIColor.clear
+                                            
+                                            if let topVC = strongSelf.topMostViewController() {
+                                                topVC.present(hostingController, animated: true)
+                                            } else if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                               let window = windowScene.windows.first,
+                                               let rootVC = window.rootViewController {
+                                                rootVC.present(hostingController, animated: true)
+                                            }
+                                        }
+                                    case .failure:
+                                        // Fallback to showing without sets
+                                        guard let strongSelf = self else { return }
+                                        let hostingController = UIHostingController(rootView: ExerciseDetailView(exercise: exercise, viewModel: strongSelf))
+                                        hostingController.modalPresentationStyle = UIModalPresentationStyle.pageSheet
+                                        hostingController.view.backgroundColor = UIColor.clear
+                                        
+                                        if let topVC = strongSelf.topMostViewController() {
+                                            topVC.present(hostingController, animated: true)
+                                        } else if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                           let window = windowScene.windows.first,
+                                           let rootVC = window.rootViewController {
+                                            rootVC.present(hostingController, animated: true)
+                                        }
+                                    }
+                                }
+                            }
+                            return
+                        }
                         if let item = items.first(where: { $0.movementId == movementId }) {
                             guard let strongSelf = self else { return }
                             let movementWithSets = strongSelf.convertToMovement(from: item)
@@ -912,8 +1117,8 @@ class ModernGymTrackerViewController: UIViewController, ObservableObject, Catego
                     AWSWorkoutService.shared.getMovements(userId: nil, isPublic: true, limit: 1000) { [weak self] publicResult in
                         DispatchQueue.main.async {
                             switch publicResult {
-                            case .success(let items):
-                                if let item = items.first(where: { $0.movementId == movementId }) {
+                            case .success(let publicResponse):
+                                if let item = publicResponse.data?.first(where: { $0.movementId == movementId }) {
                                     guard let strongSelf = self else { return }
                                     let movementWithSets = strongSelf.convertToMovement(from: item)
                                     
@@ -1487,6 +1692,19 @@ struct GymTrackerView: View {
             loadTodayWorkout()
             loadFeaturedContent()
             loadPersonalizedContent()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("RefreshGymData"))) { notification in
+            if let type = notification.userInfo?["type"] as? String {
+                switch type {
+                case "movement":
+                    loadFeaturedContent()
+                case "session", "plan":
+                    loadPersonalizedContent()
+                    loadTodayWorkout()
+                default:
+                    break
+                }
+            }
         }
     }
     
@@ -2329,14 +2547,20 @@ struct GymTrackerView: View {
             case .success(let response):
                 if let planLogs = response.data?.logs, !planLogs.isEmpty {
                     // Fetch all plans to find the active ones
-                    let plansResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+                    let plansResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                         AWSWorkoutService.shared.getPlans(userId: userId, limit: 100) { result in
                             continuation.resume(returning: result)
                         }
                     }
                     
                     switch plansResult {
-                    case .success(let planItems):
+                    case .success(let planResponse):
+                        guard let planItems = planResponse.data else {
+                            await MainActor.run {
+                                self.isLoadingTodayWorkout = false
+                            }
+                            return
+                        }
                         // Find today's workout from active plans
                         for planLog in planLogs {
                             if let planId = planLog.planId,
@@ -2457,14 +2681,20 @@ struct GymTrackerView: View {
         
         Task {
             // Fetch user's exercises from AWS
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                 AWSWorkoutService.shared.getMovements(userId: userId, limit: 20) { result in
                     continuation.resume(returning: result)
                 }
             }
             
             switch result {
-            case .success(let items):
+            case .success(let response):
+                guard let items = response.data else {
+                    await MainActor.run {
+                        self.isLoadingFeatured = false
+                    }
+                    return
+                }
                 // Convert to movement structs
                 let exercises = items.prefix(10).compactMap { item -> movement? in
                     viewModel.convertToMovement(from: item)
@@ -2505,14 +2735,20 @@ struct GymTrackerView: View {
                     let sessionIds = Array(Set(logs.compactMap { $0.originalSessionId }))
                     
                     // Fetch sessions from AWS
-                    let sessionsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+                    let sessionsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                         AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
                             continuation.resume(returning: result)
                         }
                     }
                     
                     switch sessionsResult {
-                    case .success(let sessionItems):
+                    case .success(let sessionResponse):
+                        guard let sessionItems = sessionResponse.data else {
+                            await MainActor.run {
+                                self.isLoadingRecommended = false
+                            }
+                            return
+                        }
                         var sessions: [workoutSession] = []
                         for sessionId in sessionIds {
                             if let sessionItem = sessionItems.first(where: { $0.sessionId == sessionId }) {
@@ -2562,14 +2798,17 @@ struct GymTrackerView: View {
                     let planIds = Array(Set(planLogs.compactMap { $0.planId }))
                     
                     // Fetch plans from AWS
-                    let plansResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+                    let plansResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                         AWSWorkoutService.shared.getPlans(userId: userId, limit: 100) { result in
                             continuation.resume(returning: result)
                         }
                     }
                     
                     switch plansResult {
-                    case .success(let planItems):
+                    case .success(let planResponse):
+                        guard let planItems = planResponse.data else {
+                            return
+                        }
                         var plans: [plan] = []
                         for planId in planIds {
                             if let planItem = planItems.first(where: { $0.planId == planId }) {
@@ -5525,14 +5764,16 @@ struct ModernTextEditor: View {
     let title: String
     let placeholder: String
     @Binding var text: String
-    let icon: String
+    let icon: String?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.8))
+                if let icon = icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                }
                 
                 Text(title)
                     .font(.system(size: 16, weight: .semibold))
@@ -6061,15 +6302,92 @@ struct BrowseLibraryView: View {
         Task {
             switch browseType {
             case .exercises:
-                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
-                    AWSWorkoutService.shared.getMovements(userId: userId, limit: 100) { result in
-                        continuation.resume(returning: result)
-                    }
-                }
+                await loadAllMovements(userId: userId)
                 
-                switch result {
-                case .success(let items):
-                    let exercises = items.compactMap { item -> movement? in
+            case .sessions:
+                await loadAllSessions(userId: userId)
+                
+            case .plans:
+                await loadAllPlans(userId: userId)
+            }
+        }
+    }
+    
+    private func loadAllMovements(userId: String) async {
+        var allItems: [AWSWorkoutService.WorkoutItem] = []
+        var lastEvaluatedKey: String? = nil
+        
+        // First load user's movements
+        repeat {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getMovements(
+                    userId: userId,
+                    limit: 100,
+                    lastEvaluatedKey: lastEvaluatedKey
+                ) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+            
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    allItems.append(contentsOf: items)
+                    lastEvaluatedKey = response.lastEvaluatedKey
+                    print("📥 [BrowseLibrary] Loaded \(items.count) user movements (total: \(allItems.count))")
+                    
+                    if response.lastEvaluatedKey == nil {
+                        break
+                    }
+                } else {
+                    break
+                }
+            case .failure(let error):
+                print("❌ [BrowseLibrary] Error loading user movements: \(error.localizedDescription)")
+                break
+            }
+        } while lastEvaluatedKey != nil
+        
+        // Then load public/starter movements (available to everyone)
+        lastEvaluatedKey = nil
+        repeat {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getMovements(
+                    userId: nil,
+                    isPublic: true,
+                    limit: 100,
+                    lastEvaluatedKey: lastEvaluatedKey
+                ) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+            
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    // Only add items that aren't already in the list (avoid duplicates)
+                    let existingIds = Set(allItems.compactMap { $0.movementId })
+                    let newItems = items.filter { item in
+                        guard let id = item.movementId else { return false }
+                        return !existingIds.contains(id)
+                    }
+                    allItems.append(contentsOf: newItems)
+                    lastEvaluatedKey = response.lastEvaluatedKey
+                    print("📥 [BrowseLibrary] Loaded \(newItems.count) public movements (total: \(allItems.count))")
+                    
+                    if response.lastEvaluatedKey == nil {
+                        break
+                    }
+                } else {
+                    break
+                }
+            case .failure(let error):
+                print("❌ [BrowseLibrary] Error loading public movements: \(error.localizedDescription)")
+                break
+            }
+        } while lastEvaluatedKey != nil
+        
+        let exercises = allItems.compactMap { item -> movement? in
                         var mov = movement()
                         mov.id = item.movementId ?? UUID().uuidString
                         mov.movement1Name = item.movement1Name ?? item.name ?? "Unnamed Movement"
@@ -6110,27 +6428,89 @@ struct BrowseLibraryView: View {
                         
                         return mov
                     }
-                    await MainActor.run {
-                        self.items = exercises
-                        self.isLoading = false
-                    }
-                case .failure:
-                    await MainActor.run {
-                        self.isLoading = false
-                    }
+        await MainActor.run {
+            self.items = exercises
+            self.isLoading = false
+            print("✅ [BrowseLibrary] Total movements loaded: \(exercises.count)")
+        }
+    }
+    
+    private func loadAllSessions(userId: String) async {
+        var allItems: [AWSWorkoutService.WorkoutItem] = []
+        var lastEvaluatedKey: String? = nil
+        
+        // First load user's sessions
+        repeat {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getSessions(
+                    userId: userId,
+                    limit: 100,
+                    lastEvaluatedKey: lastEvaluatedKey
+                ) { result in
+                    continuation.resume(returning: result)
                 }
-                
-            case .sessions:
-                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
-                    AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
-                        continuation.resume(returning: result)
+            }
+            
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    allItems.append(contentsOf: items)
+                    lastEvaluatedKey = response.lastEvaluatedKey
+                    print("📥 [BrowseLibrary] Loaded \(items.count) user sessions (total: \(allItems.count))")
+                    
+                    if response.lastEvaluatedKey == nil {
+                        break
                     }
+                } else {
+                    break
                 }
-                
-                switch result {
-                case .success(let items):
-                    var sessions: [workoutSession] = []
-                    for item in items {
+            case .failure(let error):
+                print("❌ [BrowseLibrary] Error loading user sessions: \(error.localizedDescription)")
+                break
+            }
+        } while lastEvaluatedKey != nil
+        
+        // Then load public sessions (available to everyone)
+        lastEvaluatedKey = nil
+        repeat {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getSessions(
+                    userId: nil,
+                    isPublic: true,
+                    limit: 100,
+                    lastEvaluatedKey: lastEvaluatedKey
+                ) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+            
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    // Only add items that aren't already in the list (avoid duplicates)
+                    let existingIds = Set(allItems.compactMap { $0.sessionId })
+                    let newItems = items.filter { item in
+                        guard let id = item.sessionId else { return false }
+                        return !existingIds.contains(id)
+                    }
+                    allItems.append(contentsOf: newItems)
+                    lastEvaluatedKey = response.lastEvaluatedKey
+                    print("📥 [BrowseLibrary] Loaded \(newItems.count) public sessions (total: \(allItems.count))")
+                    
+                    if response.lastEvaluatedKey == nil {
+                        break
+                    }
+                } else {
+                    break
+                }
+            case .failure(let error):
+                print("❌ [BrowseLibrary] Error loading public sessions: \(error.localizedDescription)")
+                break
+            }
+        } while lastEvaluatedKey != nil
+        
+        var sessions: [workoutSession] = []
+        for item in allItems {
                         if let sessionId = item.sessionId {
                             var session = workoutSession()
                             session.id = sessionId
@@ -6176,27 +6556,89 @@ struct BrowseLibraryView: View {
                             sessions.append(session)
                         }
                     }
-                    await MainActor.run {
-                        self.items = sessions
-                        self.isLoading = false
-                    }
-                case .failure:
-                    await MainActor.run {
-                        self.isLoading = false
-                    }
+        await MainActor.run {
+            self.items = sessions
+            self.isLoading = false
+            print("✅ [BrowseLibrary] Total sessions loaded: \(sessions.count)")
+        }
+    }
+    
+    private func loadAllPlans(userId: String) async {
+        var allItems: [AWSWorkoutService.WorkoutItem] = []
+        var lastEvaluatedKey: String? = nil
+        
+        // First load user's plans
+        repeat {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getPlans(
+                    userId: userId,
+                    limit: 100,
+                    lastEvaluatedKey: lastEvaluatedKey
+                ) { result in
+                    continuation.resume(returning: result)
                 }
-                
-            case .plans:
-                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
-                    AWSWorkoutService.shared.getPlans(userId: userId, limit: 100) { result in
-                        continuation.resume(returning: result)
+            }
+            
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    allItems.append(contentsOf: items)
+                    lastEvaluatedKey = response.lastEvaluatedKey
+                    print("📥 [BrowseLibrary] Loaded \(items.count) user plans (total: \(allItems.count))")
+                    
+                    if response.lastEvaluatedKey == nil {
+                        break
                     }
+                } else {
+                    break
                 }
-                
-                switch result {
-                case .success(let items):
-                    var plans: [plan] = []
-                    for item in items {
+            case .failure(let error):
+                print("❌ [BrowseLibrary] Error loading user plans: \(error.localizedDescription)")
+                break
+            }
+        } while lastEvaluatedKey != nil
+        
+        // Then load public plans (available to everyone)
+        lastEvaluatedKey = nil
+        repeat {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getPlans(
+                    userId: nil,
+                    isPublic: true,
+                    limit: 100,
+                    lastEvaluatedKey: lastEvaluatedKey
+                ) { result in
+                    continuation.resume(returning: result)
+                }
+            }
+            
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    // Only add items that aren't already in the list (avoid duplicates)
+                    let existingIds = Set(allItems.compactMap { $0.planId })
+                    let newItems = items.filter { item in
+                        guard let id = item.planId else { return false }
+                        return !existingIds.contains(id)
+                    }
+                    allItems.append(contentsOf: newItems)
+                    lastEvaluatedKey = response.lastEvaluatedKey
+                    print("📥 [BrowseLibrary] Loaded \(newItems.count) public plans (total: \(allItems.count))")
+                    
+                    if response.lastEvaluatedKey == nil {
+                        break
+                    }
+                } else {
+                    break
+                }
+            case .failure(let error):
+                print("❌ [BrowseLibrary] Error loading public plans: \(error.localizedDescription)")
+                break
+            }
+        } while lastEvaluatedKey != nil
+        
+        var plans: [plan] = []
+        for item in allItems {
                         if let planId = item.planId {
                             var p = plan()
                             p.id = planId
@@ -6207,16 +6649,10 @@ struct BrowseLibraryView: View {
                             plans.append(p)
                         }
                     }
-                    await MainActor.run {
-                        self.items = plans
-                        self.isLoading = false
-                    }
-                case .failure:
-                    await MainActor.run {
-                        self.isLoading = false
-                    }
-                }
-            }
+        await MainActor.run {
+            self.items = plans
+            self.isLoading = false
+            print("✅ [BrowseLibrary] Total plans loaded: \(plans.count)")
         }
     }
 }
@@ -7416,14 +7852,15 @@ struct PlanDetailView: View {
         guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
         
         Task {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                 AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
                     continuation.resume(returning: result)
                 }
             }
             
             switch result {
-            case .success(let items):
+            case .success(let response):
+                guard let items = response.data else { return nil }
                 if let sessionItem = items.first(where: { $0.sessionId == sessionId }) {
                     var session = workoutSession()
                     session.id = sessionItem.sessionId ?? UUID().uuidString
@@ -7477,14 +7914,20 @@ struct PlanDetailView: View {
         }
         
         Task {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                 AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
                     continuation.resume(returning: result)
                 }
             }
             
             switch result {
-            case .success(let items):
+            case .success(let response):
+                guard let items = response.data else {
+                    await MainActor.run {
+                        self.isLoadingSessions = false
+                    }
+                    return
+                }
                 var names: [String: String] = [:]
                 for item in items {
                     if let sessionId = item.sessionId, sessionIds.contains(sessionId) {
@@ -7625,14 +8068,15 @@ struct PlanDetailView: View {
         }
         
         // Fetch the session from AWS
-        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
             AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
                 continuation.resume(returning: result)
             }
         }
         
         switch result {
-        case .success(let items):
+        case .success(let response):
+            guard let items = response.data else { return nil }
             if let sessionItem = items.first(where: { $0.sessionId == sessionId }) {
                 return convertToWorkoutSession(from: sessionItem, userId: userId)
             }

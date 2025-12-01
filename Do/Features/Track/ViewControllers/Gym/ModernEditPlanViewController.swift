@@ -51,6 +51,9 @@ class ModernEditPlanViewController: UIViewController {
 
 struct EditPlanView: View {
     @State private var draftPlan: plan
+    @State private var isSaving = false
+    @State private var showError = false
+    @State private var errorMessage = ""
     let onSave: (plan) -> Void
     let onCancel: () -> Void
     
@@ -67,66 +70,195 @@ struct EditPlanView: View {
     }
     
     var body: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("Plan Details")) {
-                    TextField("Plan name", text: Binding(
-                        get: { draftPlan.name },
-                        set: { draftPlan.name = $0 }
-                    ))
-                    TextField("Description", text: Binding(
-                        get: { draftPlan.description ?? "" },
-                        set: { draftPlan.description = $0.isEmpty ? nil : $0 }
-                    ))
-                    TextField("Difficulty", text: Binding(
-                        get: { draftPlan.difficulty ?? "" },
-                        set: { draftPlan.difficulty = $0.isEmpty ? nil : $0 }
-                    ))
-                }
-                
-                Section(header: Text("Schedule Type")) {
-                    Toggle("Day of the week plan", isOn: Binding(
-                        get: { draftPlan.isDayOfTheWeekPlan ?? false },
-                        set: { draftPlan.isDayOfTheWeekPlan = $0 }
-                    ))
-                }
-                
-                Section(header: Text("Equipment")) {
-                    Toggle("Equipment needed", isOn: Binding(
-                        get: { draftPlan.equipmentNeeded ?? false },
-                        set: { draftPlan.equipmentNeeded = $0 }
-                    ))
-                }
-            }
-            .navigationTitle(planToEdit == nil ? "New Plan" : "Edit Plan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        onCancel()
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0),
+                    .init(color: Color(red: 0.08, green: 0.08, blue: 0.12), location: 0.5),
+                    .init(color: Color(red: 0.1, green: 0.1, blue: 0.15), location: 1)
+                ]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .edgesIgnoringSafeArea(.all)
+            
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Header
+                    VStack(spacing: 8) {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 48))
+                            .foregroundColor(Color(red: 0.3, green: 0.5, blue: 0.98))
+                            .padding(.top, 20)
+                        
+                        Text(planToEdit == nil ? "New Plan" : "Edit Plan")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.white)
                     }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        savePlan()
+                    .padding(.bottom, 8)
+                    
+                    // Plan Details Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Plan Details")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(.horizontal, 20)
+                        
+                        VStack(spacing: 12) {
+                            ModernTextField(
+                                title: "Plan Name",
+                                text: Binding(
+                                    get: { draftPlan.name },
+                                    set: { draftPlan.name = $0 }
+                                ),
+                                placeholder: "e.g., 4-Week Strength Program"
+                            )
+                            
+                            ModernTextEditor(
+                                title: "Description",
+                                text: Binding(
+                                    get: { draftPlan.description ?? "" },
+                                    set: { draftPlan.description = $0.isEmpty ? nil : $0 }
+                                ),
+                                placeholder: "Add a description...",
+                                icon: "text.alignleft"
+                            )
+                            
+                            ModernTextField(
+                                title: "Difficulty",
+                                text: Binding(
+                                    get: { draftPlan.difficulty ?? "" },
+                                    set: { draftPlan.difficulty = $0.isEmpty ? nil : $0 }
+                                ),
+                                placeholder: "e.g., Advanced"
+                            )
+                        }
                     }
-                    .disabled(draftPlan.name.isEmpty)
+                    .padding(.horizontal, 20)
+                    
+                    // Schedule Type Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Schedule Type")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(.horizontal, 20)
+                        
+                        ModernToggle(
+                            title: "Day of the Week Plan",
+                            icon: "calendar.badge.clock",
+                            isOn: Binding(
+                                get: { draftPlan.isDayOfTheWeekPlan ?? false },
+                                set: { draftPlan.isDayOfTheWeekPlan = $0 }
+                            )
+                        )
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Equipment Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Equipment")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(.horizontal, 20)
+                        
+                        ModernToggle(
+                            title: "Equipment Needed",
+                            icon: "wrench.and.screwdriver",
+                            isOn: Binding(
+                                get: { draftPlan.equipmentNeeded ?? false },
+                                set: { draftPlan.equipmentNeeded = $0 }
+                            )
+                        )
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 40)
                 }
+                .padding(.vertical, 20)
             }
+            
+            // Save Button (fixed at bottom)
+            VStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    Button(action: onCancel) {
+                        Text("Cancel")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(16)
+                    }
+                    
+                    Button(action: savePlan) {
+                        if isSaving {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        } else {
+                            Text("Save")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                    .background(
+                        draftPlan.name.isEmpty || isSaving
+                            ? Color.gray.opacity(0.3)
+                            : LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color(red: 0.3, green: 0.5, blue: 0.98),
+                                    Color(red: 0.2, green: 0.4, blue: 0.9)
+                                ]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                    )
+                    .cornerRadius(16)
+                    .disabled(draftPlan.name.isEmpty || isSaving)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08).opacity(0), location: 0),
+                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0.3),
+                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 1)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Error", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
         }
     }
     
     private var planToEdit: plan? {
-        // Check if this is editing an existing plan by comparing IDs
         return draftPlan.id.isEmpty ? nil : draftPlan
     }
     
     private func savePlan() {
-        // Save to AWS
         guard let userId = CurrentUserService.shared.userID else {
-            onCancel()
+            errorMessage = "Please log in to save plans"
+            showError = true
             return
         }
+        
+        guard !draftPlan.name.isEmpty else {
+            errorMessage = "Please enter a plan name"
+            showError = true
+            return
+        }
+        
+        isSaving = true
         
         let isEditing = planToEdit != nil
         
@@ -140,17 +272,19 @@ struct EditPlanView: View {
                 sessions: draftPlan.sessions ?? [:],
                 isDayOfTheWeekPlan: draftPlan.isDayOfTheWeekPlan ?? false,
                 difficulty: draftPlan.difficulty,
-                equipmentNeeded: draftPlan.equipmentNeeded ?? false                
+                equipmentNeeded: draftPlan.equipmentNeeded ?? false
             ) { result in
                 DispatchQueue.main.async {
+                    self.isSaving = false
                     switch result {
                     case .success(let savedItem):
-                        var savedPlan = draftPlan
-                        savedPlan.id = savedItem.planId ?? draftPlan.id
+                        var savedPlan = self.draftPlan
+                        savedPlan.id = savedItem.planId ?? self.draftPlan.id
                         self.onSave(savedPlan)
                     case .failure(let error):
                         print("❌ Error updating plan: \(error.localizedDescription)")
-                        self.onCancel()
+                        self.errorMessage = error.localizedDescription
+                        self.showError = true
                     }
                 }
             }
@@ -167,18 +301,19 @@ struct EditPlanView: View {
                 equipmentNeeded: draftPlan.equipmentNeeded ?? false
             ) { result in
                 DispatchQueue.main.async {
+                    self.isSaving = false
                     switch result {
                     case .success(let savedItem):
-                        var savedPlan = draftPlan
-                        savedPlan.id = savedItem.planId ?? draftPlan.id
+                        var savedPlan = self.draftPlan
+                        savedPlan.id = savedItem.planId ?? self.draftPlan.id
                         self.onSave(savedPlan)
                     case .failure(let error):
                         print("❌ Error creating plan: \(error.localizedDescription)")
-                        self.onCancel()
+                        self.errorMessage = error.localizedDescription
+                        self.showError = true
                     }
                 }
             }
         }
     }
 }
-

@@ -325,3 +325,12 @@ struct MeditationByIdResponse: Codable {
     let data: MeditationLibraryItem
 }
 
+/// Subscription tier price information from backend
+struct SubscriptionTierPrice: Codable {
+    let tier: String
+    let monthlyPrice: Double
+    let annualPrice: Double
+    let monthlyPriceId: String
+    let annualPriceId: String
+}
+

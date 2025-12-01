@@ -1046,7 +1046,7 @@ struct UnifiedSubscriptionCard: View {
     
     private var priceDisplay: String {
         let price = period == .monthly ? tier.monthlyPrice : tier.annualPrice
-        let formatted = String(format: "$%.2f", Double(price) / 100.0)
+        let formatted = String(format: "$%.2f", price)
         return period == .monthly ? "\(formatted)/mo" : "\(formatted)/yr"
     }
     

@@ -51,6 +51,9 @@ class ModernEditSessionViewController: UIViewController {
 
 struct EditSessionView: View {
     @State private var draftSession: workoutSession
+    @State private var isSaving = false
+    @State private var showError = false
+    @State private var errorMessage = ""
     let onSave: (workoutSession) -> Void
     let onCancel: () -> Void
     
@@ -67,79 +70,203 @@ struct EditSessionView: View {
     }
     
     var body: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("Session Details")) {
-                    TextField("Session name", text: Binding(
-                        get: { draftSession.name ?? "" },
-                        set: { draftSession.name = $0.isEmpty ? nil : $0 }
-                    ))
-                    TextField("Description", text: Binding(
-                        get: { draftSession.description ?? "" },
-                        set: { draftSession.description = $0.isEmpty ? nil : $0 }
-                    ))
-                    TextField("Difficulty", text: Binding(
-                        get: { draftSession.difficulty ?? "" },
-                        set: { draftSession.difficulty = $0.isEmpty ? nil : $0 }
-                    ))
-                }
-                
-                Section(header: Text("Duration")) {
-                    HStack {
-                        Text("Duration (minutes)")
-                        Spacer()
-                        TextField("0", value: Binding(
-                            get: { Double(draftSession.duration ?? 0) },
-                            set: { draftSession.duration = $0 > 0 ? Int($0) : nil }
-                        ), format: .number)
-                        .keyboardType(.numberPad)
-                        .frame(width: 80)
-                        .multilineTextAlignment(.trailing)
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0),
+                    .init(color: Color(red: 0.08, green: 0.08, blue: 0.12), location: 0.5),
+                    .init(color: Color(red: 0.1, green: 0.1, blue: 0.15), location: 1)
+                ]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .edgesIgnoringSafeArea(.all)
+            
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Header
+                    VStack(spacing: 8) {
+                        Image(systemName: "rectangle.stack.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(Color(red: 0.976, green: 0.576, blue: 0.125))
+                            .padding(.top, 20)
+                        
+                        Text(sessionToEdit == nil ? "New Session" : "Edit Session")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(.white)
                     }
-                }
-                
-                Section(header: Text("Equipment")) {
-                    if let equipment = draftSession.equipmentNeeded {
-                        ForEach(equipment, id: \.self) { item in
-                            Text(item)
+                    .padding(.bottom, 8)
+                    
+                    // Session Details Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Session Details")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(.horizontal, 20)
+                        
+                        VStack(spacing: 12) {
+                            ModernTextField(
+                                title: "Session Name",
+                                text: Binding(
+                                    get: { draftSession.name ?? "" },
+                                    set: { draftSession.name = $0.isEmpty ? nil : $0 }
+                                ),
+                                placeholder: "e.g., Full Body Workout"
+                            )
+                            
+                            ModernTextEditor(
+                                title: "Description",
+                                text: Binding(
+                                    get: { draftSession.description ?? "" },
+                                    set: { draftSession.description = $0.isEmpty ? nil : $0 }
+                                ),
+                                placeholder: "Add a description...",
+                                icon: "text.alignleft"
+                            )
+                            
+                            ModernTextField(
+                                title: "Difficulty",
+                                text: Binding(
+                                    get: { draftSession.difficulty ?? "" },
+                                    set: { draftSession.difficulty = $0.isEmpty ? nil : $0 }
+                                ),
+                                placeholder: "e.g., Intermediate"
+                            )
                         }
-                    } else {
-                        Text("No equipment specified")
-                            .foregroundColor(.secondary)
                     }
+                    .padding(.horizontal, 20)
+                    
+                    // Duration Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Duration")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(.horizontal, 20)
+                        
+                        HStack {
+                            Image(systemName: "clock.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(.white.opacity(0.8))
+                                .frame(width: 24)
+                            
+                            Text("Duration (minutes)")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundColor(.white)
+                            
+                            Spacer()
+                            
+                            TextField("0", value: Binding(
+                                get: { Double(draftSession.duration ?? 0) },
+                                set: { draftSession.duration = $0 > 0 ? Int($0) : nil }
+                            ), format: .number)
+                            .keyboardType(.numberPad)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(12)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 40)
                 }
+                .padding(.vertical, 20)
             }
-            .navigationTitle(sessionToEdit == nil ? "New Session" : "Edit Session")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        onCancel()
+            
+            // Save Button (fixed at bottom)
+            VStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    Button(action: onCancel) {
+                        Text("Cancel")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(16)
                     }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveSession()
+                    
+                    Button(action: saveSession) {
+                        if isSaving {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        } else {
+                            Text("Save")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
                     }
-                    .disabled(draftSession.name?.isEmpty ?? true)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56)
+                    .background(
+                        (draftSession.name?.isEmpty ?? true) || isSaving
+                            ? Color.gray.opacity(0.3)
+                            : LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color(red: 0.976, green: 0.576, blue: 0.125),
+                                    Color(red: 1.0, green: 0.42, blue: 0.21)
+                                ]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                    )
+                    .cornerRadius(16)
+                    .disabled((draftSession.name?.isEmpty ?? true) || isSaving)
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08).opacity(0), location: 0),
+                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0.3),
+                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 1)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
             }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Error", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
         }
     }
     
     private var sessionToEdit: workoutSession? {
-        // Check if this is editing an existing session by comparing IDs
         return draftSession.id.isEmpty ? nil : draftSession
     }
     
     private func saveSession() {
-        // Save to AWS
         guard let userId = CurrentUserService.shared.userID else {
-            onCancel()
+            errorMessage = "Please log in to save sessions"
+            showError = true
             return
         }
         
-        let isEditing = sessionToEdit != nil
+        guard !(draftSession.name?.isEmpty ?? true) else {
+            errorMessage = "Please enter a session name"
+            showError = true
+            return
+        }
+        
+        isSaving = true
         
         // Convert movements to dictionaries
         let movementsDict: [[String: Any]] = (draftSession.movementsInSession ?? []).map { movement in
@@ -157,6 +284,8 @@ struct EditSessionView: View {
         // Convert duration from minutes to seconds for estimatedDuration
         let estimatedDuration: Double? = draftSession.duration.map { Double($0 * 60) }
         
+        let isEditing = sessionToEdit != nil
+        
         if isEditing {
             // Update existing session
             AWSWorkoutService.shared.updateSession(
@@ -169,14 +298,16 @@ struct EditSessionView: View {
                 estimatedDuration: estimatedDuration
             ) { result in
                 DispatchQueue.main.async {
+                    self.isSaving = false
                     switch result {
                     case .success(let savedItem):
-                        var savedSession = draftSession
-                        savedSession.id = savedItem.sessionId ?? draftSession.id
+                        var savedSession = self.draftSession
+                        savedSession.id = savedItem.sessionId ?? self.draftSession.id
                         self.onSave(savedSession)
                     case .failure(let error):
                         print("❌ Error updating session: \(error.localizedDescription)")
-                        self.onCancel()
+                        self.errorMessage = error.localizedDescription
+                        self.showError = true
                     }
                 }
             }
@@ -192,18 +323,19 @@ struct EditSessionView: View {
                 estimatedDuration: estimatedDuration
             ) { result in
                 DispatchQueue.main.async {
+                    self.isSaving = false
                     switch result {
                     case .success(let savedItem):
-                        var savedSession = draftSession
-                        savedSession.id = savedItem.sessionId ?? draftSession.id
+                        var savedSession = self.draftSession
+                        savedSession.id = savedItem.sessionId ?? self.draftSession.id
                         self.onSave(savedSession)
                     case .failure(let error):
                         print("❌ Error creating session: \(error.localizedDescription)")
-                        self.onCancel()
+                        self.errorMessage = error.localizedDescription
+                        self.showError = true
                     }
                 }
             }
         }
     }
 }
-

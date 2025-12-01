@@ -486,7 +486,7 @@ struct SubscriptionUpgradeView: View {
     
     private var priceDisplay: String {
         let price = selectedPeriod == .monthly ? selectedTier.monthlyPrice : selectedTier.annualPrice
-        let formatted = String(format: "$%.2f", Double(price) / 100.0)
+        let formatted = String(format: "$%.2f", price)
         let period = selectedPeriod == .monthly ? "/month" : "/year"
         return "\(formatted)\(period)"
     }
@@ -729,7 +729,7 @@ struct SubscriptionTierCard: View {
     
     private var priceDisplay: String {
         let price = period == .monthly ? tier.monthlyPrice : tier.annualPrice
-        return String(format: "$%.0f", Double(price) / 100.0)
+        return String(format: "$%.2f", price)
     }
     
     private var tokensPerDay: Int {
@@ -974,7 +974,7 @@ struct SubscriptionPaymentSheet: View {
     
     private var priceDisplay: String {
         let price = period == .monthly ? tier.monthlyPrice : tier.annualPrice
-        let formatted = String(format: "$%.2f", Double(price) / 100.0)
+        let formatted = String(format: "$%.2f", price)
         return period == .monthly ? "\(formatted)/month" : "\(formatted)/year"
     }
     

@@ -104,20 +104,24 @@ enum PremiumTier: String, CaseIterable, Codable, Hashable {
     }
     
     /// Stripe Price ID for monthly subscription
+    /// NOTE: These are placeholder values. Update with actual Stripe price IDs from your Stripe dashboard.
+    /// Alternatively, fetch prices from backend using GenieAPIService.shared.getSubscriptionPrices()
     var stripeMonthlyPriceId: String {
         switch self {
         case .free: return ""
-        case .athlete: return "price_athlete_monthly" // TODO: Replace with actual Stripe price ID
+        case .athlete: return "price_athlete_monthly" // TODO: Replace with actual Stripe price ID (e.g., "price_1ABC...")
         case .champion: return "price_champion_monthly" // TODO: Replace with actual Stripe price ID
         case .legend: return "price_legend_monthly" // TODO: Replace with actual Stripe price ID
         }
     }
     
     /// Stripe Price ID for annual subscription
+    /// NOTE: These are placeholder values. Update with actual Stripe price IDs from your Stripe dashboard.
+    /// Alternatively, fetch prices from backend using GenieAPIService.shared.getSubscriptionPrices()
     var stripeAnnualPriceId: String {
         switch self {
         case .free: return ""
-        case .athlete: return "price_athlete_annual" // TODO: Replace with actual Stripe price ID
+        case .athlete: return "price_athlete_annual" // TODO: Replace with actual Stripe price ID (e.g., "price_1XYZ...")
         case .champion: return "price_champion_annual" // TODO: Replace with actual Stripe price ID
         case .legend: return "price_legend_annual" // TODO: Replace with actual Stripe price ID
         }
