@@ -114,8 +114,8 @@ struct SelectMovementView: View {
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
-                case .success(let items):
-                    movements = items.compactMap { item -> movement? in
+                case .success(let response):
+                    movements = (response.data ?? []).compactMap { item -> movement? in
                         var mov = movement()
                         mov.id = item.movementId ?? UUID().uuidString
                         mov.movement1Name = item.movement1Name ?? item.name

@@ -384,9 +384,9 @@ class ViewPlanVC: UIViewController, UICollectionViewDelegate, UICollectionViewDa
                 limit: 100
             ) { result in
                 switch result {
-                case .success(let items):
+                case .success(let response):
                     // Convert WorkoutItem to workoutSession and filter by sessionIds
-                    let sessions = items
+                    let sessions = (response.data ?? [])
                         .filter { $0.sessionId != nil && sessionIds.contains($0.sessionId!) }
                         .compactMap { item -> workoutSession? in
                             guard let sessionId = item.sessionId else { return nil }

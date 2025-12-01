@@ -10,6 +10,7 @@ import NotificationBannerSwift
 
 struct ProfileSettingsView: View {
     @ObservedObject var viewModel: ProfileSettingsViewModel
+    @ObservedObject var userPreferences = UserPreferences.shared
     @Environment(\.presentationMode) var presentationMode
     @State private var offset = CGSize.zero
     @State private var showSubscriptionUpgrade = false
@@ -82,6 +83,9 @@ struct ProfileSettingsView: View {
                     
                     // Premium Account Section
                     premiumAccountSection
+                    
+                    // Preferences
+                    preferencesSection
                                         
                     // Privacy Settings
                     privacySection
@@ -94,6 +98,13 @@ struct ProfileSettingsView: View {
                 }
                 .padding(.top, 20)
                 .opacity(viewModel.isLoading ? 0.5 : 1.0)
+                .onAppear {
+                    // Ensure data is loaded when view appears
+                    if viewModel.name.isEmpty && viewModel.username.isEmpty && viewModel.email.isEmpty {
+                        print("🔄 [ProfileSettingsView] onAppear - Reloading user data")
+                        viewModel.loadUserData()
+                    }
+                }
                 .disabled(viewModel.isLoading)
             }
             
@@ -398,6 +409,45 @@ struct ProfileSettingsView: View {
                 .background(Color.white.opacity(0.1))
                 .cornerRadius(16)
                 .padding(.horizontal)
+        }
+    }
+    
+    // MARK: - Preferences Section
+    private var preferencesSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Preferences")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.white)
+                .padding(.horizontal)
+            
+            VStack(spacing: 1) {
+                // Units Toggle
+                Toggle("Use Metric Units", isOn: $userPreferences.useMetricSystem)
+                    .toggleStyle(SwitchToggleStyle(tint: Color(UIColor(red: 0.97, green: 0.58, blue: 0.12, alpha: 1.0))))
+                    .foregroundColor(.white)
+                    .padding()
+                    .background(Color.white.opacity(0.1))
+                
+                Divider().background(Color.white.opacity(0.1))
+                
+                // Voice Type Picker
+                HStack {
+                    Text("Voice Coach")
+                        .foregroundColor(.white)
+                    Spacer()
+                    Picker("Voice Coach", selection: $userPreferences.preferredVoiceType) {
+                        ForEach(UserPreferences.VoiceType.allCases, id: \.self) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .accentColor(Color(UIColor(red: 0.97, green: 0.58, blue: 0.12, alpha: 1.0)))
+                }
+                .padding()
+                .background(Color.white.opacity(0.1))
+            }
+            .cornerRadius(16)
+            .padding(.horizontal)
         }
     }
     

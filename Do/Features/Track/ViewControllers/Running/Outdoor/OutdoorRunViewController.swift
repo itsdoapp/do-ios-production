@@ -9809,14 +9809,41 @@ enum AnnouncementMessageType {
 extension OutdoorRunViewController: WorkoutCommunicationHandlerDelegate {
     func workoutCommunicationHandler(_ handler: WorkoutCommunicationHandler, didReceiveMessage message: [String: Any]) {
         // Handle messages from watch
-        if let type = message["type"] as? String {
+        guard let type = message["type"] as? String else { return }
+        
+        DispatchQueue.main.async {
             switch type {
+            case "workoutStateChange":
+                if let stateRaw = message["state"] as? String {
+                    self.handleWatchStateChange(stateRaw)
+                }
             case "workoutUpdate":
                 // Handle workout update from watch
                 break
             default:
                 break
             }
+        }
+    }
+    
+    private func handleWatchStateChange(_ stateRaw: String) {
+        print("📱 Received state change from watch: \(stateRaw)")
+        
+        switch stateRaw {
+        case "paused":
+            if self.runEngine.runState == .running {
+                self.toggleRunning()
+            }
+        case "running":
+            if self.runEngine.runState == .paused {
+                self.toggleRunning()
+            }
+        case "stopping", "completed":
+            if self.runEngine.runState != .completed {
+                self.endRun()
+            }
+        default:
+            break
         }
     }
     

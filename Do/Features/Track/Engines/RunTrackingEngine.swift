@@ -1191,6 +1191,102 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             return
         }
         
+        // Handle location data from watch
+        if let type = message["type"] as? String, type == "workoutLocations" {
+            handleWatchLocationData(message)
+            return
+        }
+    
+    // MARK: - Watch Location Data Handling
+    
+     func handleWatchLocationData(_ message: [String: Any]) {
+        guard let workoutType = message["workoutType"] as? String,
+              let locationsArray = message["locations"] as? [[String: Any]] else {
+            print("⚠️ [RunTrackingEngine] Invalid location data from watch")
+            return
+        }
+        
+        print("📍 [RunTrackingEngine] Received \(locationsArray.count) locations from watch for \(workoutType)")
+        
+        // Convert watch location data to LocationData format
+        let watchLocations = locationsArray.compactMap { dict -> LocationData? in
+            guard let lat = dict["latitude"] as? Double,
+                  let lon = dict["longitude"] as? Double,
+                  let timestamp = dict["timestamp"] as? TimeInterval else {
+                return nil
+            }
+            
+            return LocationData(
+                latitude: lat,
+                longitude: lon,
+                altitude: dict["altitude"] as? Double ?? 0,
+                horizontalAccuracy: dict["horizontalAccuracy"] as? Double ?? 0,
+                verticalAccuracy: dict["verticalAccuracy"] as? Double ?? 0,
+                course: dict["course"] as? Double ?? 0,
+                speed: dict["speed"] as? Double ?? 0,
+                distance: 0, // Will be calculated
+                timestamp: Date(timeIntervalSince1970: timestamp),
+                heartRate: dict["heartRate"] as? Double,
+                cadence: dict["cadence"] as? Double
+            )
+        }
+        
+        // Merge watch locations with phone locations
+        // If watch is primary for distance, use watch locations
+        if !isPrimaryForDistance && !watchLocations.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                
+                // Add watch locations to our location list
+                for watchLocation in watchLocations {
+                    // Check if we already have this location (avoid duplicates)
+                    let isDuplicate = self.locationList.contains { existing in
+                        abs(existing.latitude - watchLocation.latitude) < 0.0001 &&
+                        abs(existing.longitude - watchLocation.longitude) < 0.0001 &&
+                        abs(existing.timestamp.timeIntervalSince(watchLocation.timestamp)) < 1.0
+                    }
+                    
+                    if !isDuplicate {
+                        // Calculate distance delta
+                        let delta: Double
+                        if let lastLocation = self.locationList.last {
+                            delta = lastLocation.distance(from: watchLocation)
+                        } else {
+                            delta = 0
+                        }
+                        
+                        // Create new LocationData with calculated distance
+                        let locationWithDistance = LocationData(
+                            latitude: watchLocation.latitude,
+                            longitude: watchLocation.longitude,
+                            altitude: watchLocation.altitude,
+                            horizontalAccuracy: watchLocation.horizontalAccuracy,
+                            verticalAccuracy: watchLocation.verticalAccuracy,
+                            course: watchLocation.course,
+                            speed: watchLocation.speed,
+                            distance: delta,
+                            timestamp: watchLocation.timestamp,
+                            heartRate: watchLocation.heartRate,
+                            cadence: watchLocation.cadence
+                        )
+                        
+                        self.locationList.append(locationWithDistance)
+                    }
+                }
+                
+                // Update distance from location list
+                if !self.locationList.isEmpty {
+                    let totalDistance = self.locationList.reduce(0.0) { total, loc in
+                        total + loc.distance
+                    }
+                    self.distance = Measurement(value: totalDistance, unit: .meters)
+                }
+                
+                print("📍 [RunTrackingEngine] Merged watch locations. Total locations: \(self.locationList.count)")
+            }
+        }
+    }
+        
         // Log message type
         if let type = message["type"] as? String {
             // Reduce verbosity once the watch has acknowledged our join
@@ -3943,8 +4039,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     private func requestPermissions() {
         // Request location permissions
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.requestAlwaysAuthorization()
+        // Use ModernLocationManager to avoid UI unresponsiveness warnings
+        ModernLocationManager.shared.requestWhenInUseAuthorization()
+        ModernLocationManager.shared.requestAlwaysAuthorization()
         
         // Request HealthKit permissions
         if HKHealthStore.isHealthDataAvailable() {

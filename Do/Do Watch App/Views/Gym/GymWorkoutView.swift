@@ -8,10 +8,12 @@
 
 import SwiftUI
 import HealthKit
+import WatchKit
 
 struct GymWorkoutView: View {
     @EnvironmentObject var workoutCoordinator: WatchWorkoutCoordinator
     @EnvironmentObject var connectivityManager: WatchConnectivityManager
+    @Environment(\.presentationMode) var presentationMode
     
     @State private var sessionName: String = "Gym Workout"
     @State private var elapsedTime: TimeInterval = 0
@@ -23,34 +25,188 @@ struct GymWorkoutView: View {
     @State private var currentSet: Int = 0
     @State private var isTracking = false
     @State private var timer: Timer?
+    @State private var selection: Int = 1
+    @State private var showCountdown = false
+    @State private var showCelebration = false
+    @State private var celebrationMessage = ""
+    @State private var workoutStartTime: Date?
+    @State private var showCancelButton = true
     
     @State private var showingSetInput = false
     @State private var setReps: Int = 0
     @State private var setWeight: Double = 0
+    @State private var isOpenTraining: Bool = false // Track if this is open training mode
+    
+    private let healthKitManager = HealthKitWorkoutManager.shared
     
     var body: some View {
         ZStack {
-            AmbientBackground(color: .purple)
+            AmbientBackground(color: .purple, heartRate: heartRate)
             
-            VStack(spacing: 12) {
-                // Header
-                HStack {
-                    Image(systemName: "figure.strengthtraining.traditional")
-                        .font(.caption)
-                        .foregroundColor(.purple)
-                    Text(sessionName.uppercased())
-                        .font(.caption)
+            if showCountdown {
+                IgnitionCountdownView(
+                    workoutType: "Gym",
+                    workoutColor: .purple,
+                    onComplete: {
+                        showCountdown = false
+                        actuallyStartWorkout()
+                    },
+                    onCancel: {
+                        showCountdown = false
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                )
+            } else if showCelebration {
+                CelebrationView(
+                    achievement: celebrationMessage,
+                    color: .purple
+                )
+                .onAppear {
+                    WKInterfaceDevice.current().play(.success)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        showCelebration = false
+                        completeWorkoutStop()
+                    }
+                }
+            } else {
+                TabView(selection: $selection) {
+                    gymControlsPage
+                        .tag(0)
+                    
+                    metricsView
+                        .tag(1)
+                    
+                    NowPlayingView()
+                        .tag(2)
+                }
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .automatic))
+            }
+        }
+        .navigationBarHidden(true)
+        .sheet(isPresented: $showingSetInput) {
+            SetInputView(reps: $setReps, weight: $setWeight, onSave: {
+                saveSet()
+            })
+        }
+        .onAppear {
+            if workoutCoordinator.activeWorkout == nil {
+                // Check if we received open training mode from phone
+                checkForOpenTrainingFromPhone()
+                showCountdown = true
+            } else {
+                requestWorkoutState()
+            }
+        }
+        .onDisappear {
+            stopTimer()
+        }
+    }
+    
+    private var gymControlsPage: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            
+            // Cancel button (first 10 seconds)
+            if showCancelButton && workoutStartTime != nil && Date().timeIntervalSince(workoutStartTime!) < 10 {
+                Button(action: cancelWorkout) {
+                    VStack {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                        Text("Cancel")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Color.gray.opacity(0.2))
+                    .cornerRadius(25)
+                }
+                .buttonStyle(.plain)
+            }
+            
+            // Log Set Button
+            Button(action: logSet) {
+                VStack {
+                    Image(systemName: "plus")
+                        .font(.title2)
+                    Text("Log Set")
+                        .font(.caption2)
                         .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(Color.purple.opacity(0.3))
+                .cornerRadius(25)
+            }
+            .buttonStyle(.plain)
+            
+            // Pause / Resume Button
+            Button(action: {
+                if isTracking {
+                    pauseWorkout()
+                } else {
+                    resumeWorkout()
+                }
+            }) {
+                VStack {
+                    Image(systemName: isTracking ? "pause.fill" : "play.fill")
+                        .font(.title2)
+                    Text(isTracking ? "Pause" : "Resume")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(Color.yellow.opacity(0.2))
+                .cornerRadius(25)
+            }
+            .buttonStyle(.plain)
+            
+            // End Workout Button
+            Button(action: stopWorkout) {
+                VStack {
+                    Image(systemName: "xmark")
+                        .font(.title2)
+                    Text("End")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(Color.red.opacity(0.2))
+                .cornerRadius(25)
+            }
+            .buttonStyle(.plain)
+            
+            Spacer()
+        }
+        .padding(.horizontal)
+    }
+    
+    private var metricsView: some View {
+            VStack(spacing: 12) {
+                HStack {
+                ZStack {
+                    Circle()
+                        .fill(Color.purple.opacity(0.2))
+                        .frame(width: 24, height: 24)
+                    
+                    Image(systemName: "figure.strengthtraining.traditional")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.purple)
+                }
+                
+                    Text(sessionName.uppercased())
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundColor(.gray)
+                
                     Spacer()
                 }
                 .padding(.horizontal)
                 .padding(.top, 4)
                 
-                // Hero (Time)
                 HeroMetric(value: formatTime(elapsedTime), unit: "DURATION", color: .white)
                 
-                // Stats
                 VStack(spacing: 8) {
                     HStack(spacing: 8) {
                         StatBox(label: "VOLUME", value: formatVolume(totalVolume), color: .purple)
@@ -73,48 +229,46 @@ struct GymWorkoutView: View {
                 }
                 
                 Spacer()
-                
-                // Controls
-                WorkoutControls(
-                    isRunning: isTracking,
-                    onPause: pauseWorkout,
-                    onResume: startWorkout,
-                    onStop: stopWorkout,
-                    color: .purple,
-                    customAction: logSet,
-                    customIcon: "plus"
-                )
-                .padding(.bottom, 8)
-            }
-        }
-        .navigationBarHidden(true)
-        .sheet(isPresented: $showingSetInput) {
-            SetInputView(reps: $setReps, weight: $setWeight, onSave: {
-                saveSet()
-            })
-        }
-        .onAppear {
-            requestWorkoutState()
-        }
-        .onDisappear {
-            stopTimer()
         }
     }
     
-    private func startWorkout() {
+    private func actuallyStartWorkout() {
+        workoutStartTime = Date()
+        
+        // Update session name if open training
+        if isOpenTraining {
+            sessionName = "Open Training"
+        }
+        
+        workoutCoordinator.startWorkout(type: .gym, isOpenTraining: isOpenTraining)
+        healthKitManager.startWorkout(type: .gym) // Gym workouts are always indoor
         isTracking = true
         startTimer()
         
         let message: [String: Any] = [
             "type": "gymWorkoutStart",
             "sessionName": sessionName,
+            "isOpenTraining": isOpenTraining,
             "timestamp": Date().timeIntervalSince1970
         ]
         
         connectivityManager.sendMessage(message)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            showCancelButton = false
+        }
+    }
+    
+    private func resumeWorkout() {
+        workoutCoordinator.resumeWorkout()
+        healthKitManager.resumeWorkout()
+        isTracking = true
+        startTimer()
     }
     
     private func pauseWorkout() {
+        workoutCoordinator.pauseWorkout()
+        healthKitManager.pauseWorkout()
         isTracking = false
         stopTimer()
         
@@ -124,7 +278,24 @@ struct GymWorkoutView: View {
         ])
     }
     
+    private func cancelWorkout() {
+        if let startTime = workoutStartTime, Date().timeIntervalSince(startTime) < 10 {
+            healthKitManager.cancelWorkout()
+            workoutCoordinator.stopWorkout()
+            isTracking = false
+            stopTimer()
+            presentationMode.wrappedValue.dismiss()
+        }
+    }
+    
     private func stopWorkout() {
+        celebrationMessage = "Great Workout!"
+        showCelebration = true
+    }
+    
+    private func completeWorkoutStop() {
+        healthKitManager.endWorkout()
+        workoutCoordinator.stopWorkout()
         isTracking = false
         stopTimer()
         
@@ -132,6 +303,8 @@ struct GymWorkoutView: View {
             "type": "gymWorkoutStop",
             "timestamp": Date().timeIntervalSince1970
         ])
+        
+        presentationMode.wrappedValue.dismiss()
     }
     
     private func logSet() {
@@ -148,12 +321,10 @@ struct GymWorkoutView: View {
         
         connectivityManager.sendMessage(setData)
         
-        // Update local totals
         totalVolume += setWeight * Double(setReps)
         totalReps += setReps
         currentSet += 1
         
-        // Reset input
         setReps = 0
         setWeight = 0
         showingSetInput = false
@@ -214,6 +385,28 @@ struct GymWorkoutView: View {
             return String(format: "%.0flbs", volume)
         }
     }
+    
+    private func checkForOpenTrainingFromPhone() {
+        // Check if phone sent open training info
+        // This would be set via WatchConnectivity when handoff occurs
+        // For now, default to false (structured workout)
+        isOpenTraining = false
+        
+        // Listen for open training messages
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("GymWorkoutStateChanged"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            if let userInfo = notification.userInfo,
+               let isOpenTraining = userInfo["isOpenTraining"] as? Bool {
+                self.isOpenTraining = isOpenTraining
+                if isOpenTraining {
+                    self.sessionName = "Open Training"
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Set Input View
@@ -231,7 +424,6 @@ struct SetInputView: View {
                     .font(.headline)
                     .foregroundColor(.purple)
                 
-                // Reps input
                 VStack {
                     Text("REPS")
                         .font(.caption)
@@ -247,7 +439,6 @@ struct SetInputView: View {
                 .background(Color.white.opacity(0.1))
                 .cornerRadius(16)
                 
-                // Weight input
                 VStack {
                     Text("WEIGHT (LBS)")
                         .font(.caption)

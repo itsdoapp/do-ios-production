@@ -567,7 +567,8 @@ class AWSWorkoutService {
         isTemplate: Bool? = nil,
         category: String? = nil,
         limit: Int = 100,
-        completion: @escaping (Result<[WorkoutItem], Error>) -> Void
+        lastEvaluatedKey: String? = nil,
+        completion: @escaping (Result<GetWorkoutResponse, Error>) -> Void
     ) {
         guard let url = URL(string: getMovementsURL) else {
             completion(.failure(WorkoutError.invalidURL))
@@ -589,6 +590,9 @@ class AWSWorkoutService {
         if let category = category {
             queryItems.append(URLQueryItem(name: "category", value: category))
         }
+        if let lastEvaluatedKey = lastEvaluatedKey {
+            queryItems.append(URLQueryItem(name: "lastEvaluatedKey", value: lastEvaluatedKey))
+        }
         
         components?.queryItems = queryItems.isEmpty ? nil : queryItems
         
@@ -603,7 +607,14 @@ class AWSWorkoutService {
         // Check cache first
         if let userId = userId, let cached = WorkoutCacheManager.shared.getCachedMovements(userId: userId) {
             print("📦 [AWSWorkoutService] Returning cached movements for userId: \(userId)")
-            completion(.success(cached))
+            let cachedResponse = GetWorkoutResponse(
+                success: true,
+                data: cached,
+                count: cached.count,
+                error: nil,
+                lastEvaluatedKey: nil
+            )
+            completion(.success(cachedResponse))
             
             // Still fetch in background to update cache
             Task {
@@ -641,15 +652,18 @@ class AWSWorkoutService {
                 let decoder = JSONDecoder()
                 let response = try decoder.decode(GetWorkoutResponse.self, from: data)
                 
-                if response.success, let items = response.data {
-                    print("✅ [AWSWorkoutService] Retrieved \(items.count) movements")
+                if response.success {
+                    print("✅ [AWSWorkoutService] Retrieved \(response.data?.count ?? 0) movements")
+                    if let lastKey = response.lastEvaluatedKey {
+                        print("   Has more: lastEvaluatedKey = \(lastKey)")
+                    }
                     
-                    // Cache the results
-                    if let userId = userId {
+                    // Cache the results (only if no pagination token, meaning first page)
+                    if let userId = userId, lastEvaluatedKey == nil, let items = response.data {
                         WorkoutCacheManager.shared.cacheMovements(items, userId: userId)
                     }
                     
-                    completion(.success(items))
+                    completion(.success(response))
                 } else {
                     completion(.failure(WorkoutError.apiError(response.error ?? "Unknown error")))
                 }
@@ -668,7 +682,8 @@ class AWSWorkoutService {
         isPublic: Bool? = nil,
         category: String? = nil,
         limit: Int = 100,
-        completion: @escaping (Result<[WorkoutItem], Error>) -> Void
+        lastEvaluatedKey: String? = nil,
+        completion: @escaping (Result<GetWorkoutResponse, Error>) -> Void
     ) {
         guard let url = URL(string: getSessionsURL) else {
             completion(.failure(WorkoutError.invalidURL))
@@ -687,6 +702,9 @@ class AWSWorkoutService {
         if let category = category {
             queryItems.append(URLQueryItem(name: "category", value: category))
         }
+        if let lastEvaluatedKey = lastEvaluatedKey {
+            queryItems.append(URLQueryItem(name: "lastEvaluatedKey", value: lastEvaluatedKey))
+        }
         
         components?.queryItems = queryItems.isEmpty ? nil : queryItems
         
@@ -701,7 +719,14 @@ class AWSWorkoutService {
         // Check cache first
         if let userId = userId, let cached = WorkoutCacheManager.shared.getCachedSessions(userId: userId) {
             print("📦 [AWSWorkoutService] Returning cached sessions for userId: \(userId)")
-            completion(.success(cached))
+            let cachedResponse = GetWorkoutResponse(
+                success: true,
+                data: cached,
+                count: cached.count,
+                error: nil,
+                lastEvaluatedKey: nil
+            )
+            completion(.success(cachedResponse))
             
             // Still fetch in background to update cache
             Task {
@@ -739,15 +764,18 @@ class AWSWorkoutService {
                 let decoder = JSONDecoder()
                 let response = try decoder.decode(GetWorkoutResponse.self, from: data)
                 
-                if response.success, let items = response.data {
-                    print("✅ [AWSWorkoutService] Retrieved \(items.count) sessions")
+                if response.success {
+                    print("✅ [AWSWorkoutService] Retrieved \(response.data?.count ?? 0) sessions")
+                    if let lastKey = response.lastEvaluatedKey {
+                        print("   Has more: lastEvaluatedKey = \(lastKey)")
+                    }
                     
-                    // Cache the results
-                    if let userId = userId {
+                    // Cache the results (only if no pagination token, meaning first page)
+                    if let userId = userId, lastEvaluatedKey == nil, let items = response.data {
                         WorkoutCacheManager.shared.cacheSessions(items, userId: userId)
                     }
                     
-                    completion(.success(items))
+                    completion(.success(response))
                 } else {
                     completion(.failure(WorkoutError.apiError(response.error ?? "Unknown error")))
                 }
@@ -765,7 +793,8 @@ class AWSWorkoutService {
         userId: String? = nil,
         isPublic: Bool? = nil,
         limit: Int = 100,
-        completion: @escaping (Result<[WorkoutItem], Error>) -> Void
+        lastEvaluatedKey: String? = nil,
+        completion: @escaping (Result<GetWorkoutResponse, Error>) -> Void
     ) {
         guard let url = URL(string: getPlansURL) else {
             completion(.failure(WorkoutError.invalidURL))
@@ -781,6 +810,9 @@ class AWSWorkoutService {
         if let isPublic = isPublic {
             queryItems.append(URLQueryItem(name: "isPublic", value: isPublic ? "true" : "false"))
         }
+        if let lastEvaluatedKey = lastEvaluatedKey {
+            queryItems.append(URLQueryItem(name: "lastEvaluatedKey", value: lastEvaluatedKey))
+        }
         
         components?.queryItems = queryItems.isEmpty ? nil : queryItems
         
@@ -795,7 +827,14 @@ class AWSWorkoutService {
         // Check cache first
         if let userId = userId, let cached = WorkoutCacheManager.shared.getCachedPlans(userId: userId) {
             print("📦 [AWSWorkoutService] Returning cached plans for userId: \(userId)")
-            completion(.success(cached))
+            let cachedResponse = GetWorkoutResponse(
+                success: true,
+                data: cached,
+                count: cached.count,
+                error: nil,
+                lastEvaluatedKey: nil
+            )
+            completion(.success(cachedResponse))
             
             // Still fetch in background to update cache
             Task {
@@ -833,15 +872,18 @@ class AWSWorkoutService {
                 let decoder = JSONDecoder()
                 let response = try decoder.decode(GetWorkoutResponse.self, from: data)
                 
-                if response.success, let items = response.data {
-                    print("✅ [AWSWorkoutService] Retrieved \(items.count) plans")
+                if response.success {
+                    print("✅ [AWSWorkoutService] Retrieved \(response.data?.count ?? 0) plans")
+                    if let lastKey = response.lastEvaluatedKey {
+                        print("   Has more: lastEvaluatedKey = \(lastKey)")
+                    }
                     
-                    // Cache the results
-                    if let userId = userId {
+                    // Cache the results (only if no pagination token, meaning first page)
+                    if let userId = userId, lastEvaluatedKey == nil, let items = response.data {
                         WorkoutCacheManager.shared.cachePlans(items, userId: userId)
                     }
                     
-                    completion(.success(items))
+                    completion(.success(response))
                 } else {
                     completion(.failure(WorkoutError.apiError(response.error ?? "Unknown error")))
                 }

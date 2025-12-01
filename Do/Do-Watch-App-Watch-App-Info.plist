@@ -3,6 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>UIBackgroundModes</key>
-	<array/>
+	<array>
+		<string>workout-processing</string>
+	</array>
+	<!-- ClockKit complications removed - using WidgetKit instead -->
+	<!-- WidgetKit complications are automatically discovered via DailyBricksWidgetBundle -->
 </dict>
 </plist>

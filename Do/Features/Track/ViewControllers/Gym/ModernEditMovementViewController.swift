@@ -69,19 +69,27 @@ struct EditMovementView: View {
         self.onCancel = onCancel
     }
     
+    private var backgroundGradient: LinearGradient {
+        let color1 = Color(red: 0.05, green: 0.05, blue: 0.08)
+        let color2 = Color(red: 0.08, green: 0.08, blue: 0.12)
+        let color3 = Color(red: 0.1, green: 0.1, blue: 0.15)
+        let stops = [
+            Gradient.Stop(color: color1, location: 0),
+            Gradient.Stop(color: color2, location: 0.5),
+            Gradient.Stop(color: color3, location: 1)
+        ]
+        return LinearGradient(
+            gradient: Gradient(stops: stops),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+    
     var body: some View {
         ZStack {
             // Background gradient
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0),
-                    .init(color: Color(red: 0.08, green: 0.08, blue: 0.12), location: 0.5),
-                    .init(color: Color(red: 0.1, green: 0.1, blue: 0.15), location: 1)
-                ]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .edgesIgnoringSafeArea(.all)
+            backgroundGradient
+                .edgesIgnoringSafeArea(.all)
             
             ScrollView {
                 VStack(spacing: 24) {

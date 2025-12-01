@@ -101,11 +101,27 @@ class ProfileAPIService {
             throw NetworkError.httpError(httpResponse.statusCode, errorBody)
         }
         
+        // Log raw response for debugging
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("🔍 [ProfileAPI] Raw response: \(responseString.prefix(500))")
+        }
+        
         let decoder = JSONDecoder()
         let profileResponse = try decoder.decode(UserProfileResponse.self, from: data)
         
         guard profileResponse.success else {
             throw NetworkError.invalidResponse(profileResponse.error ?? "Failed to fetch profile")
+        }
+        
+        // Log decoded response structure
+        if let userData = profileResponse.data?.user {
+            print("🔍 [ProfileAPI] Decoded user data:")
+            print("   - userId: \(userData.userId)")
+            print("   - username: \(userData.username ?? "nil")")
+            print("   - name: \(userData.name ?? "nil")")
+            print("   - email: \(userData.email ?? "nil")")
+        } else {
+            print("⚠️ [ProfileAPI] Response success but no user data in response.data")
         }
         
         return profileResponse

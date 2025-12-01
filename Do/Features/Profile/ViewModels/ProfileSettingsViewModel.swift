@@ -30,7 +30,7 @@ class ProfileSettingsViewModel: ObservableObject {
     @Published var tokensRemaining: Int = 0
     
     // MARK: - Private Properties
-    private var user: UserModel
+    var user: UserModel // Made internal so hosting controller can update it
     private var originalEmail: String = ""
     
     // MARK: - Initialization
@@ -44,6 +44,15 @@ class ProfileSettingsViewModel: ObservableObject {
     
     // MARK: - Private Methods
     private func initializeFromUserModel(_ userModel: UserModel) {
+        print("🔄 [ProfileSettings] Initializing from UserModel")
+        print("   - userID: \(userModel.userID ?? "nil")")
+        print("   - name: \(userModel.name ?? "nil")")
+        print("   - userName: \(userModel.userName ?? "nil")")
+        print("   - email: \(userModel.email ?? "nil")")
+        print("   - bio: \(userModel.bio ?? "nil")")
+        print("   - privacyToggle: \(userModel.privacyToggle ?? false)")
+        print("   - profilePictureUrl: \(userModel.profilePictureUrl ?? "nil")")
+        
         // Populate fields from the passed user model immediately
         self.name = userModel.name ?? ""
         self.username = userModel.userName ?? ""
@@ -55,7 +64,9 @@ class ProfileSettingsViewModel: ObservableObject {
         // Load profile image if available
         if let profileImage = userModel.profilePicture {
             self.profileImage = profileImage
+            print("✅ [ProfileSettings] Loaded profile image from UserModel")
         } else if let profilePicUrl = userModel.profilePictureUrl, !profilePicUrl.isEmpty {
+            print("🔄 [ProfileSettings] Loading profile image from URL: \(profilePicUrl)")
             // Load image asynchronously if URL is available
             Task {
                 let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
@@ -63,18 +74,41 @@ class ProfileSettingsViewModel: ObservableObject {
                     self.profileImage = image
                     // Explicitly trigger UI update for image
                     self.objectWillChange.send()
+                    print("✅ [ProfileSettings] Profile image loaded: \(image != nil ? "success" : "failed")")
                 }
             }
+        } else {
+            print("⚠️ [ProfileSettings] No profile image available in UserModel")
         }
+        
+        // Explicitly trigger UI update
+        self.objectWillChange.send()
+        print("✅ [ProfileSettings] Initialized fields from UserModel")
     }
     
     // MARK: - Public Methods
     func loadUserData() {
         guard let userId = user.userID else {
             print("⚠️ [ProfileSettings] No userID available, cannot load profile data")
+            // Try to get userID from CurrentUserService as fallback
+            if let currentUserId = CurrentUserService.shared.userID {
+                print("🔄 [ProfileSettings] Using CurrentUserService userID: \(currentUserId)")
+                self.user = CurrentUserService.shared.user
+                // Retry with the updated user
+                guard let retryUserId = self.user.userID else {
+                    print("❌ [ProfileSettings] Still no userID after CurrentUserService fallback")
+                    return
+                }
+                // Continue with retryUserId
+                loadUserDataForUserId(retryUserId)
+            }
             return
         }
         
+        loadUserDataForUserId(userId)
+    }
+    
+    private func loadUserDataForUserId(_ userId: String) {
         print("🔄 [ProfileSettings] Loading user data for userId: \(userId)")
         isLoading = true
         
@@ -91,34 +125,83 @@ class ProfileSettingsViewModel: ObservableObject {
                     throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "User data not found"])
                 }
                 
+                print("✅ [ProfileSettings] Received user data from API:")
+                print("   - name: \(userData.name ?? "nil")")
+                print("   - username: \(userData.username ?? "nil")")
+                print("   - email: \(userData.email ?? "nil")")
+                print("   - bio: \(userData.bio ?? "nil")")
+                print("   - privacyToggle: \(userData.privacyToggle ?? false)")
+                print("   - profilePictureUrl: \(userData.profilePictureUrl ?? "nil")")
+                
+                // Check if API returned all nil values - if so, fallback to CurrentUserService
+                let hasApiData = userData.name != nil || userData.username != nil || userData.email != nil
+                
                 await MainActor.run { [weak self] in
                     guard let self = self else { return }
                     
-                    // Update with fresh data from API
-                    self.name = userData.name ?? ""
-                    self.username = userData.username ?? "" // Handle optional username
-                    self.bio = userData.bio ?? ""
-                    self.email = userData.email ?? ""
-                    self.originalEmail = self.email
-                    self.isPrivateAccount = userData.privacyToggle ?? false
-                    
-                    // Update local user model
-                    self.user.name = userData.name
-                    self.user.userName = userData.username ?? "" // Handle optional username
-                    self.user.bio = userData.bio
-                    self.user.email = userData.email
-                    self.user.privacyToggle = userData.privacyToggle
-                    self.user.profilePictureUrl = userData.profilePictureUrl
-                    
-                    // Load profile image if URL is available
-                    if let profilePicUrl = userData.profilePictureUrl {
-                        Task {
-                            let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
-                            await MainActor.run {
-                                self.profileImage = image
-                                // Explicitly trigger UI update for image
-                                self.objectWillChange.send()
+                    if !hasApiData {
+                        print("⚠️ [ProfileSettings] API returned all nil values, falling back to CurrentUserService")
+                        // Fallback to CurrentUserService data
+                        let currentUser = CurrentUserService.shared.user
+                        self.name = currentUser.name ?? ""
+                        self.username = currentUser.userName ?? ""
+                        self.bio = currentUser.bio ?? ""
+                        self.email = currentUser.email ?? ""
+                        self.originalEmail = self.email
+                        self.isPrivateAccount = currentUser.privacyToggle ?? false
+                        
+                        // Also update local user model
+                        self.user.name = currentUser.name
+                        self.user.userName = currentUser.userName
+                        self.user.bio = currentUser.bio
+                        self.user.email = currentUser.email
+                        self.user.privacyToggle = currentUser.privacyToggle
+                        self.user.profilePictureUrl = currentUser.profilePictureUrl
+                        
+                        // Load profile image from CurrentUserService if available
+                        if let profileImage = currentUser.profilePicture {
+                            self.profileImage = profileImage
+                        } else if let profilePicUrl = currentUser.profilePictureUrl, !profilePicUrl.isEmpty {
+                            print("🔄 [ProfileSettings] Loading profile image from CurrentUserService URL: \(profilePicUrl)")
+                            Task {
+                                let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
+                                await MainActor.run {
+                                    self.profileImage = image
+                                    self.objectWillChange.send()
+                                }
                             }
+                        }
+                    } else {
+                        // Update with fresh data from API
+                        self.name = userData.name ?? ""
+                        self.username = userData.username ?? "" // Handle optional username
+                        self.bio = userData.bio ?? ""
+                        self.email = userData.email ?? ""
+                        self.originalEmail = self.email
+                        self.isPrivateAccount = userData.privacyToggle ?? false
+                        
+                        // Update local user model
+                        self.user.name = userData.name
+                        self.user.userName = userData.username ?? "" // Handle optional username
+                        self.user.bio = userData.bio
+                        self.user.email = userData.email
+                        self.user.privacyToggle = userData.privacyToggle
+                        self.user.profilePictureUrl = userData.profilePictureUrl
+                        
+                        // Load profile image from API response if available
+                        if let profilePicUrl = userData.profilePictureUrl, !profilePicUrl.isEmpty {
+                            print("🔄 [ProfileSettings] Loading profile image from URL: \(profilePicUrl)")
+                            Task {
+                                let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
+                                await MainActor.run {
+                                    self.profileImage = image
+                                    // Explicitly trigger UI update for image
+                                    self.objectWillChange.send()
+                                    print("✅ [ProfileSettings] Profile image loaded: \(image != nil ? "success" : "failed")")
+                                }
+                            }
+                        } else {
+                            print("⚠️ [ProfileSettings] No profile picture URL in API response")
                         }
                     }
                     
@@ -130,19 +213,24 @@ class ProfileSettingsViewModel: ObservableObject {
                     self.isLoading = false
                     // Explicitly trigger UI update
                     self.objectWillChange.send()
-                    print("✅ [ProfileSettings] Successfully loaded user data")
+                    print("✅ [ProfileSettings] Successfully loaded and updated user data")
                 }
             } catch {
-                print("❌ [ProfileSettings] Error fetching user data from AWS: \(error)")
+                print("❌ [ProfileSettings] Error fetching user data from AWS: \(error.localizedDescription)")
+                print("   Error details: \(error)")
                 await MainActor.run { [weak self] in
                     guard let self = self else { return }
                     self.isLoading = false
                     // Only show error if we don't have initial data
-                    if self.name.isEmpty && self.username.isEmpty {
-                        self.showError("Failed to load user data")
+                    if self.name.isEmpty && self.username.isEmpty && self.email.isEmpty {
+                        print("❌ [ProfileSettings] No initial data available, showing error")
+                        self.showError("Failed to load user data: \(error.localizedDescription)")
                     } else {
                         print("⚠️ [ProfileSettings] Using cached/initial data due to API error")
+                        print("   Current values - name: '\(self.name)', username: '\(self.username)', email: '\(self.email)'")
                     }
+                    // Explicitly trigger UI update even on error
+                    self.objectWillChange.send()
                 }
             }
         }
@@ -217,7 +305,7 @@ class ProfileSettingsViewModel: ObservableObject {
         showError("Subscription management coming soon")
         
         /* Remove when AWS subscription API is ready
-        ADC l let userId = user.userID else { return }
+        guard let userId = user.userID else { return }
         isLoading = true
         
         Task {
@@ -269,7 +357,7 @@ class ProfileSettingsViewModel: ObservableObject {
         showError("Account deletion not yet implemented in AWS")
         
         /* Remove when AWS delete API is ready
-        await l let userId = user.userID else { return }
+        guard let userId = user.userID else { return }
         isLoading = true
         
         Task {

@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 import AVFoundation
+import WatchConnectivity
 
 class UserPreferences: ObservableObject {
     static let shared = UserPreferences()
@@ -82,6 +83,8 @@ class UserPreferences: ObservableObject {
     @Published var useMetricSystem: Bool {
         didSet {
             UserDefaults.standard.set(useMetricSystem, forKey: "useMetricSystem")
+            syncToWatch()
+            syncToBackend()
         }
     }
     
@@ -167,5 +170,60 @@ class UserPreferences: ObservableObject {
             self.preferredVoiceType = .female
         }
     }
+    
+    // MARK: - Syncing
+    
+    func updateFromWatch(useMetric: Bool) {
+        DispatchQueue.main.async {
+            // Avoid loops
+            if self.useMetricSystem != useMetric {
+                self.useMetricSystem = useMetric
+                print("📱 [UserPreferences] Updated from watch: \(useMetric ? "Metric" : "Imperial")")
+            }
+        }
+    }
+    
+    private func syncToWatch() {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        
+        let message: [String: Any] = [
+            "type": "unitPreferences",
+            "useMetric": useMetricSystem
+        ]
+        
+        if session.isReachable {
+            session.sendMessage(message, replyHandler: nil) { error in
+                print("❌ [UserPreferences] Error sending to watch: \(error.localizedDescription)")
+            }
+        } else {
+            do {
+                try session.updateApplicationContext(message)
+            } catch {
+                print("❌ [UserPreferences] Error updating context: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    private func syncToBackend() {
+        guard let userId = try? KeychainManager.shared.get(Constants.Keychain.userId) else { return }
+        
+        Task {
+            do {
+                // Sync logic to backend
+                let fields: [String: Any] = [
+                    "units": useMetricSystem ? "metric" : "imperial"
+                ]
+                
+                let _ = try await ProfileAPIService.shared.updateUserProfile(
+                    userId: userId,
+                    fields: fields
+                )
+                print("✅ [UserPreferences] Synced to backend")
+            } catch {
+                print("❌ [UserPreferences] Failed to sync to backend: \(error)")
+            }
+        }
+    }
 }
-

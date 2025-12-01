@@ -233,11 +233,29 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     // MARK: - Public Methods
     
     func requestWhenInUseAuthorization() {
-        manager.requestWhenInUseAuthorization()
+        // Check authorization status first to avoid unnecessary calls
+        let currentStatus = manager.authorizationStatus
+        guard currentStatus == .notDetermined else {
+            print("📍 Authorization already determined: \(currentStatus.rawValue), skipping request")
+            return
+        }
+        // Dispatch to main thread to avoid UI unresponsiveness warning
+        DispatchQueue.main.async { [weak self] in
+            self?.manager.requestWhenInUseAuthorization()
+        }
     }
     
     func requestAlwaysAuthorization() {
-        manager.requestAlwaysAuthorization()
+        // Check authorization status first to avoid unnecessary calls
+        let currentStatus = manager.authorizationStatus
+        guard currentStatus == .notDetermined || currentStatus == .authorizedWhenInUse else {
+            print("📍 Authorization status: \(currentStatus.rawValue), skipping always request")
+            return
+        }
+        // Dispatch to main thread to avoid UI unresponsiveness warning
+        DispatchQueue.main.async { [weak self] in
+            self?.manager.requestAlwaysAuthorization()
+        }
     }
     
     func startUpdatingLocation() {

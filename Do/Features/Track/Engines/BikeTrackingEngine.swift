@@ -3857,8 +3857,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     private func requestPermissions() {
         // Request location permissions
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.requestAlwaysAuthorization()
+        // Use ModernLocationManager to avoid UI unresponsiveness warnings
+        ModernLocationManager.shared.requestWhenInUseAuthorization()
+        ModernLocationManager.shared.requestAlwaysAuthorization()
         
         // Request HealthKit permissions
         if HKHealthStore.isHealthDataAvailable() {

@@ -27,6 +27,7 @@ class WatchAuthService: NSObject, ObservableObject {
     
     private var pendingAuthCompletions: [(Bool, [String: Any]?) -> Void] = []
     private var activationObserver: AnyCancellable?
+    private var isCheckingAuth = false // Prevent duplicate auth checks
     
     @Published var isAuthenticated: Bool = false {
         didSet {
@@ -84,14 +85,41 @@ class WatchAuthService: NSObject, ObservableObject {
                         print("📱 [WatchAuthService] Processing \(self.pendingAuthCompletions.count) pending auth requests")
                         let completions = self.pendingAuthCompletions
                         self.pendingAuthCompletions.removeAll()
-                        for (index, completion) in completions.enumerated() {
-                            print("📱 [WatchAuthService] Processing pending request \(index + 1)/\(completions.count)")
-                            self.performAuthCheck(completion: completion)
+                        
+                        // Check if we're already authenticated from cache
+                        let cached = self.getCachedTokens()
+                        let alreadyAuthenticated = cached != nil && self.isAuthenticated
+                        
+                        if alreadyAuthenticated {
+                            print("📱 [WatchAuthService] Already authenticated from cache, completing pending requests with cached tokens")
+                            // Complete all pending requests with cached tokens immediately
+                            for completion in completions {
+                                DispatchQueue.main.async {
+                                    completion(true, cached)
+                                }
+                            }
+                        } else {
+                            // Only perform auth check if not already authenticated
+                            for (index, completion) in completions.enumerated() {
+                                print("📱 [WatchAuthService] Processing pending request \(index + 1)/\(completions.count)")
+                                self.performAuthCheck(completion: completion)
+                            }
                         }
                     } else {
-                        print("📱 [WatchAuthService] No pending requests, performing initial auth check")
-                        self.performAuthCheck { isAuthenticated, _ in
-                            print("📱 [WatchAuthService] Initial auth status: \(isAuthenticated)")
+                        // Only perform initial auth check if we don't have cached tokens
+                        // This prevents unnecessary duplicate checks when we're already authenticated
+                        let cached = self.getCachedTokens()
+                        if cached == nil {
+                            print("📱 [WatchAuthService] No cached tokens, performing initial auth check")
+                            self.performAuthCheck { isAuthenticated, _ in
+                                print("📱 [WatchAuthService] Initial auth status: \(isAuthenticated)")
+                            }
+                        } else {
+                            print("📱 [WatchAuthService] Already have cached tokens, skipping initial auth check")
+                            // Update auth status from cache
+                            DispatchQueue.main.async {
+                                self.isAuthenticated = true
+                            }
                         }
                     }
                 }
@@ -149,6 +177,16 @@ class WatchAuthService: NSObject, ObservableObject {
             return
         }
         
+        // Check if we're already authenticated from cache before making network request
+        let cached = self.getCachedTokens()
+        if cached != nil && self.isAuthenticated {
+            print("✅ [WatchAuthService] Session is activated and already authenticated from cache, skipping network check")
+            DispatchQueue.main.async {
+                completion(true, cached)
+            }
+            return
+        }
+        
         print("✅ [WatchAuthService] Session is activated, proceeding with auth check")
         
         // Session is activated, perform the actual check
@@ -168,24 +206,88 @@ class WatchAuthService: NSObject, ObservableObject {
             return
         }
         
-        print("📱 [WatchAuthService] Performing auth check, reachable: \(session.isReachable)")
+        // Check if we're already authenticated from cache - if so, skip network check
+        let cached = self.getCachedTokens()
+        if cached != nil && self.isAuthenticated && retryCount == 0 {
+            print("✅ [WatchAuthService] Already authenticated from cache, skipping network check")
+            DispatchQueue.main.async {
+                completion(true, cached)
+            }
+            return
+        }
+        
+        // Prevent duplicate concurrent auth checks
+        guard !isCheckingAuth || retryCount > 0 else {
+            print("⚠️ [WatchAuthService] Auth check already in progress, using cached tokens")
+            let authenticated = cached != nil
+            DispatchQueue.main.async {
+                self.isAuthenticated = authenticated
+                completion(authenticated, cached)
+            }
+            return
+        }
+        
+        print("📱 [WatchAuthService] Performing auth check, reachable: \(session.isReachable), retry: \(retryCount)")
+        
+        // Only set flag if this is not a retry
+        if retryCount == 0 {
+            isCheckingAuth = true
+        }
+        
+        // Prioritize Application Context first as it's more reliable for initial sync
+        let context = session.receivedApplicationContext
+        if let type = context["type"] as? String, type == "authTokens" {
+            let idToken = context["idToken"] as? String ?? ""
+            if !idToken.isEmpty {
+                print("✅ [WatchAuthService] Found tokens in application context")
+                self.storeTokens(from: context)
+                DispatchQueue.main.async {
+                    self.isAuthenticated = true
+                    completion(true, context)
+                }
+                return
+            }
+        }
         
         if session.isReachable {
-            session.sendMessage(["request": "authStatus"], replyHandler: { response in
+            session.sendMessage(["request": "authStatus"], replyHandler: { [weak self] response in
+                guard let self = self else { return }
                 print("✅ [WatchAuthService] Received auth status response")
+                self.isCheckingAuth = false
                 DispatchQueue.main.async {
                     let isAuthenticated = response["isAuthenticated"] as? Bool ?? false
                     if isAuthenticated {
                         self.storeTokens(from: response)
+                    } else {
+                        // If phone says not authenticated, we should trust it, but verify if we have local tokens
+                         let cached = self.getCachedTokens()
+                         if cached != nil {
+                             print("⚠️ [WatchAuthService] Phone says unauthenticated but we have local tokens. Keeping local tokens.")
+                             self.isAuthenticated = true // Trust local cache if available to avoid logout loop
+                             completion(true, cached)
+                             return
+                         }
                     }
                     self.isAuthenticated = isAuthenticated
                     completion(isAuthenticated, response)
                 }
-            }, errorHandler: { error in
+            }, errorHandler: { [weak self] error in
+                guard let self = self else { return }
                 print("❌ [WatchAuthService] Error requesting login status: \(error.localizedDescription)")
                 
-                // Retry on failure (e.g. timeout) up to 2 times
-                if retryCount < 2 {
+                // Check if we have cached tokens - if so, use them and don't retry
+                let cached = self.getCachedTokens()
+                if cached != nil && self.isAuthenticated {
+                    print("✅ [WatchAuthService] Have cached tokens and already authenticated, using cache instead of retrying")
+                    self.isCheckingAuth = false
+                    DispatchQueue.main.async {
+                        completion(true, cached)
+                    }
+                    return
+                }
+                
+                // Only retry if session is still reachable, we haven't exceeded retry limit, and we don't have cached tokens
+                if retryCount < 2 && session.isReachable && cached == nil {
                     print("🔄 [WatchAuthService] Retrying auth check (attempt \(retryCount + 1))...")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         self.performAuthCheck(retryCount: retryCount + 1, completion: completion)
@@ -193,17 +295,19 @@ class WatchAuthService: NSObject, ObservableObject {
                     return
                 }
                 
+                // Stop checking and fallback to cached tokens
+                self.isCheckingAuth = false
                 DispatchQueue.main.async {
                     // Fallback to cached tokens
-                    let cached = self.getCachedTokens()
                     let authenticated = cached != nil
                     self.isAuthenticated = authenticated
                     completion(authenticated, cached)
                 }
             })
         } else {
-            // Not reachable, check application context
+            // Not reachable, check application context (again, in case it updated)
             print("📱 [WatchAuthService] iPhone not reachable, checking application context")
+            isCheckingAuth = false
             let context = session.receivedApplicationContext
             if let type = context["type"] as? String, type == "authTokens" {
                 let idToken = context["idToken"] as? String ?? ""
@@ -372,4 +476,3 @@ class WatchAuthService: NSObject, ObservableObject {
         }
     }
 }
-

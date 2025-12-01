@@ -455,21 +455,28 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
 
     // Request authorization if needed. If denied/restricted, guide user to Settings
     private func requestLocationAuthorizationIfNeeded() {
-        let status = CLLocationManager.authorizationStatus()
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse:
-            // Ensure precise accuracy if reduced
-            ModernLocationManager.shared.ensurePreciseAccuracyIfNeeded()
-            return
-        case .notDetermined:
-            locationManager.requestWhenInUseAuthorization()
-        case .denied, .restricted:
-            print("❌ Location permission denied/restricted. Prompting user to open Settings…")
-            if let url = URL(string: UIApplication.openSettingsURLString) {
-                UIApplication.shared.open(url)
+        // Check authorization status off main thread to avoid UI unresponsiveness warning
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let status = CLLocationManager.authorizationStatus()
+            DispatchQueue.main.async {
+                switch status {
+                case .authorizedAlways, .authorizedWhenInUse:
+                    // Ensure precise accuracy if reduced
+                    ModernLocationManager.shared.ensurePreciseAccuracyIfNeeded()
+                    return
+                case .notDetermined:
+                    // Use ModernLocationManager which handles the async dispatch
+                    ModernLocationManager.shared.requestWhenInUseAuthorization()
+                case .denied, .restricted:
+                    print("❌ Location permission denied/restricted. Prompting user to open Settings…")
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                @unknown default:
+                    return
+                }
             }
-        @unknown default:
-            return
         }
     }
     

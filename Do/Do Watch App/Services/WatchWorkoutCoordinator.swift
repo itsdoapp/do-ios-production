@@ -33,7 +33,7 @@ class WatchWorkoutCoordinator: ObservableObject {
     
     // MARK: - Workout Management
     
-    func startWorkout(type: WorkoutType) {
+    func startWorkout(type: WorkoutType, isIndoor: Bool = false, isOpenTraining: Bool = false) {
         guard activeWorkout == nil else {
             print("⚠️ [WatchWorkoutCoordinator] Workout already active")
             return
@@ -50,18 +50,31 @@ class WatchWorkoutCoordinator: ObservableObject {
         }
         
         // Notify phone
-        connectivityManager.sendMessage([
+        var message: [String: Any] = [
             "type": "workoutStateChange",
             "workoutType": type.rawValue,
             "state": WorkoutState.starting.rawValue,
             "workoutId": session.id
-        ])
+        ]
+        
+        // Add indoor/outdoor info for running
+        if type == .running {
+            message["isIndoor"] = isIndoor
+        }
+        
+        // Add open training info for gym
+        if type == .gym {
+            message["isOpenTraining"] = isOpenTraining
+        }
+        
+        connectivityManager.sendMessage(message)
         
         // Special handling for gym workouts
         if type == .gym {
             connectivityManager.sendMessage([
                 "type": "gymWorkoutStart",
                 "workoutId": session.id,
+                "isOpenTraining": isOpenTraining,
                 "timestamp": Date().timeIntervalSince1970
             ])
         }

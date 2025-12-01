@@ -11,27 +11,56 @@ import SwiftUI
 // MARK: - Ambient Background
 struct AmbientBackground: View {
     let color: Color
+    var heartRate: Double? = nil
+    
     @State private var pulseScale: CGFloat = 1.0
+    
+    var dynamicColor: Color {
+        if let hr = heartRate {
+            // Use HeartRateZoneService for zone calculation
+            if let zone = HeartRateZoneService.shared.calculateZone(for: hr) {
+                return zone.color
+            }
+            return .gray
+        }
+        return color
+    }
+    
+    var animationDuration: Double {
+        if let hr = heartRate, hr > 0 {
+            // Pulse faster with higher HR (60bpm = 1s, 120bpm = 0.5s)
+            return 60.0 / hr
+        }
+        return 4.0
+    }
     
     var body: some View {
         ZStack {
             Color.black.edgesIgnoringSafeArea(.all)
             
             Circle()
-                .fill(color.opacity(0.15))
+                .fill(dynamicColor.opacity(0.15))
                 .frame(width: 200, height: 200)
                 .scaleEffect(pulseScale)
                 .blur(radius: 30)
                 .onAppear {
-                    withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                        pulseScale = 1.3
-                    }
+                    startAnimation()
                 }
+                .onChange(of: heartRate) { _ in
+                    // Restart animation with new duration if HR changes significantly
+                    startAnimation()
+                }
+        }
+    }
+    
+    private func startAnimation() {
+        withAnimation(.easeInOut(duration: animationDuration).repeatForever(autoreverses: true)) {
+            pulseScale = 1.3
         }
     }
 }
 
-// MARK: - Stat Box
+// MARK: - Stat Box (Enhanced)
 struct StatBox: View {
     let label: String
     let value: String
@@ -40,7 +69,7 @@ struct StatBox: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundColor(.gray)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -52,29 +81,41 @@ struct StatBox: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
-        .background(Color.white.opacity(0.1))
-        .cornerRadius(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.1))
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
+        )
     }
 }
 
-// MARK: - Big Metric
+// MARK: - Big Metric (Enhanced)
 struct HeroMetric: View {
     let value: String
     let unit: String
     let color: Color
+    
+    @State private var pulseScale: CGFloat = 1.0
     
     var body: some View {
         VStack(spacing: 0) {
             Text(value)
                 .font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
-                .shadow(color: color.opacity(0.3), radius: 10, x: 0, y: 0)
+                .shadow(color: color.opacity(0.5), radius: 15, x: 0, y: 0)
+                .scaleEffect(pulseScale)
                 .minimumScaleFactor(0.5)
                 .lineLimit(1)
+                .onAppear {
+                    // Subtle pulse animation
+                    withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                        pulseScale = 1.02
+                    }
+                }
             
             if !unit.isEmpty {
                 Text(unit)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundColor(color)
                     .padding(.top, -4)
                     .minimumScaleFactor(0.8)
@@ -142,4 +183,3 @@ struct WorkoutControls: View {
         .buttonStyle(.plain) // Crucial for custom buttons in watchOS
     }
 }
-

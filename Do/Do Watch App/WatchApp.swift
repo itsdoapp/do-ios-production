@@ -10,6 +10,7 @@ import SwiftUI
 import HealthKit
 import CoreLocation
 import WatchConnectivity
+import WidgetKit
 
 @main
 struct WatchApp: App {
@@ -18,11 +19,19 @@ struct WatchApp: App {
     @StateObject private var connectivityManager = WatchConnectivityManager.shared
     @StateObject private var authService = WatchAuthService.shared
     @StateObject private var workoutCoordinator = WatchWorkoutCoordinator.shared
+    @StateObject private var dailyBricksService = DailyBricksService.shared
     
     @State private var isCheckingAuth = true
     
     init() {
         print("⌚️ [WatchApp] Initializing Do Watch App")
+        
+        // WidgetKit complications are registered automatically via WidgetBundle
+        // No need for ClockKit registration
+        print("✅ [WatchApp] WidgetKit complications will be available via DailyBricksWidgetBundle")
+        
+        // Reload widget timelines on app launch to ensure fresh data
+        WidgetCenter.shared.reloadTimelines(ofKind: "DailyBricksWidget")
     }
     
     var body: some Scene {

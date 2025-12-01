@@ -69,19 +69,27 @@ struct EditPlanView: View {
         self.onCancel = onCancel
     }
     
+    private var backgroundGradient: LinearGradient {
+        let color1 = Color(red: 0.05, green: 0.05, blue: 0.08)
+        let color2 = Color(red: 0.08, green: 0.08, blue: 0.12)
+        let color3 = Color(red: 0.1, green: 0.1, blue: 0.15)
+        let stops = [
+            Gradient.Stop(color: color1, location: 0),
+            Gradient.Stop(color: color2, location: 0.5),
+            Gradient.Stop(color: color3, location: 1)
+        ]
+        return LinearGradient(
+            gradient: Gradient(stops: stops),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+    
     var body: some View {
         ZStack {
             // Background gradient
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0),
-                    .init(color: Color(red: 0.08, green: 0.08, blue: 0.12), location: 0.5),
-                    .init(color: Color(red: 0.1, green: 0.1, blue: 0.15), location: 1)
-                ]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .edgesIgnoringSafeArea(.all)
+            backgroundGradient
+                .edgesIgnoringSafeArea(.all)
             
             ScrollView {
                 VStack(spacing: 24) {
@@ -117,11 +125,11 @@ struct EditPlanView: View {
                             
                             ModernTextEditor(
                                 title: "Description",
+                                placeholder: "Add a description...",
                                 text: Binding(
                                     get: { draftPlan.description ?? "" },
                                     set: { draftPlan.description = $0.isEmpty ? nil : $0 }
                                 ),
-                                placeholder: "Add a description...",
                                 icon: "text.alignleft"
                             )
                             
@@ -204,16 +212,20 @@ struct EditPlanView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 56)
                     .background(
-                        draftPlan.name.isEmpty || isSaving
-                            ? Color.gray.opacity(0.3)
-                            : LinearGradient(
-                                gradient: Gradient(colors: [
-                                    Color(red: 0.3, green: 0.5, blue: 0.98),
-                                    Color(red: 0.2, green: 0.4, blue: 0.9)
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+                        Group {
+                            if draftPlan.name.isEmpty || isSaving {
+                                Color.gray.opacity(0.3)
+                            } else {
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.3, green: 0.5, blue: 0.98),
+                                        Color(red: 0.2, green: 0.4, blue: 0.9)
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            }
+                        }
                     )
                     .cornerRadius(16)
                     .disabled(draftPlan.name.isEmpty || isSaving)

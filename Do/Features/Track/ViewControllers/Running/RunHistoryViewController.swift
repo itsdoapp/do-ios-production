@@ -693,64 +693,116 @@ class RunHistoryViewController: UIViewController, UITableViewDelegate, UITableVi
     
     // MARK: - Fetch Run Logs Methods
     
-    /// Fetch outdoor running logs from AWS
+    /// Fetch outdoor running logs from AWS with pagination support
     private func getRunningLogs(completion: @escaping ([RunLog]?, Error?) -> Void) {
         guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
             completion(nil, NSError(domain: "RunHistoryViewController", code: 1, userInfo: [NSLocalizedDescriptionKey: "User ID not available"]))
             return
         }
         
-        ActivityService.shared.getRuns(userId: userId, limit: 100) { result in
-            switch result {
-            case .success(let response):
-                guard let activities = response.data?.activities else {
-                    completion([], nil)
-                    return
+        var allRunLogs: [RunLog] = []
+        
+        func fetchPage(nextToken: String?) {
+            ActivityService.shared.getRuns(
+                userId: userId,
+                limit: 100,
+                nextToken: nextToken,
+                includeRouteUrls: true
+            ) { result in
+                switch result {
+                case .success(let response):
+                    guard let data = response.data else {
+                        completion(allRunLogs, nil)
+                        return
+                    }
+                    
+                    // Convert AWSActivity to RunLog (filter out indoor runs)
+                    let runLogs = data.activities.compactMap { activity -> RunLog? in
+                        guard !activity.isIndoorRun else { return nil }
+                        return self.convertAWSActivityToRunLog(activity)
+                    }
+                    
+                    allRunLogs.append(contentsOf: runLogs)
+                    
+                    // Continue pagination if there's more data
+                    if data.hasMore, let token = data.nextToken {
+                        print("📥 [RunHistoryViewController] Fetching next page of outdoor runs (current: \(allRunLogs.count))...")
+                        fetchPage(nextToken: token)
+                    } else {
+                        print("✅ [RunHistoryViewController] Fetched all outdoor runs: \(allRunLogs.count) total")
+                        completion(allRunLogs, nil)
+                    }
+                    
+                case .failure(let error):
+                    print("❌ [RunHistoryViewController] Error fetching running logs: \(error.localizedDescription)")
+                    // Return what we have so far, even if there was an error
+                    if !allRunLogs.isEmpty {
+                        completion(allRunLogs, nil)
+                    } else {
+                        completion(nil, error)
+                    }
                 }
-                
-                // Convert AWSActivity to RunLog (filter out indoor runs)
-                let runLogs = activities.compactMap { activity -> RunLog? in
-                    guard !activity.isIndoorRun else { return nil }
-                    return self.convertAWSActivityToRunLog(activity)
-                }
-                
-                completion(runLogs, nil)
-                
-            case .failure(let error):
-                print("❌ [RunHistoryViewController] Error fetching running logs: \(error.localizedDescription)")
-                completion(nil, error)
             }
         }
+        
+        // Start fetching from the first page
+        fetchPage(nextToken: nil)
     }
     
-    /// Fetch treadmill/indoor running logs from AWS
+    /// Fetch treadmill/indoor running logs from AWS with pagination support
     private func getTreadmillLogs(completion: @escaping ([IndoorRunLog]?, Error?) -> Void) {
         guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
             completion(nil, NSError(domain: "RunHistoryViewController", code: 1, userInfo: [NSLocalizedDescriptionKey: "User ID not available"]))
             return
         }
         
-        ActivityService.shared.getRuns(userId: userId, limit: 100) { result in
-            switch result {
-            case .success(let response):
-                guard let activities = response.data?.activities else {
-                    completion([], nil)
-                    return
+        var allIndoorLogs: [IndoorRunLog] = []
+        
+        func fetchPage(nextToken: String?) {
+            ActivityService.shared.getRuns(
+                userId: userId,
+                limit: 100,
+                nextToken: nextToken,
+                includeRouteUrls: true
+            ) { result in
+                switch result {
+                case .success(let response):
+                    guard let data = response.data else {
+                        completion(allIndoorLogs, nil)
+                        return
+                    }
+                    
+                    // Convert AWSActivity to IndoorRunLog (filter for indoor runs only)
+                    let indoorLogs = data.activities.compactMap { activity -> IndoorRunLog? in
+                        guard activity.isIndoorRun else { return nil }
+                        return self.convertAWSActivityToIndoorRunLog(activity)
+                    }
+                    
+                    allIndoorLogs.append(contentsOf: indoorLogs)
+                    
+                    // Continue pagination if there's more data
+                    if data.hasMore, let token = data.nextToken {
+                        print("📥 [RunHistoryViewController] Fetching next page of indoor runs (current: \(allIndoorLogs.count))...")
+                        fetchPage(nextToken: token)
+                    } else {
+                        print("✅ [RunHistoryViewController] Fetched all indoor runs: \(allIndoorLogs.count) total")
+                        completion(allIndoorLogs, nil)
+                    }
+                    
+                case .failure(let error):
+                    print("❌ [RunHistoryViewController] Error fetching treadmill logs: \(error.localizedDescription)")
+                    // Return what we have so far, even if there was an error
+                    if !allIndoorLogs.isEmpty {
+                        completion(allIndoorLogs, nil)
+                    } else {
+                        completion(nil, error)
+                    }
                 }
-                
-                // Convert AWSActivity to IndoorRunLog (filter for indoor runs only)
-                let indoorLogs = activities.compactMap { activity -> IndoorRunLog? in
-                    guard activity.isIndoorRun else { return nil }
-                    return self.convertAWSActivityToIndoorRunLog(activity)
-                }
-                
-                completion(indoorLogs, nil)
-                
-            case .failure(let error):
-                print("❌ [RunHistoryViewController] Error fetching treadmill logs: \(error.localizedDescription)")
-                completion(nil, error)
             }
         }
+        
+        // Start fetching from the first page
+        fetchPage(nextToken: nil)
     }
     
     // MARK: - Conversion Methods

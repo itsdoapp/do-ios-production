@@ -151,6 +151,33 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         }
     }
     
+    /// Request active workout from phone
+    func requestActiveWorkoutFromPhone(completion: @escaping ([String: Any]?) -> Void) {
+        let message: [String: Any] = [
+            "type": "requestActivePhoneWorkout",
+            "timestamp": Date().timeIntervalSince1970
+        ]
+        
+        sendMessage(message) { response in
+            if let workoutActive = response["workoutActive"] as? Bool, workoutActive {
+                // Phone has an active workout
+                var workoutData: [String: Any] = [:]
+                workoutData["workoutActive"] = true
+                workoutData["workoutType"] = response["workoutType"] as? String
+                workoutData["state"] = response["state"] ?? response["runState"] ?? response["walkState"]
+                workoutData["elapsedTime"] = response["elapsedTime"]
+                workoutData["metrics"] = response["metrics"] as? [String: Any]
+                workoutData["isWatchTracking"] = response["isWatchTracking"] as? Bool ?? false
+                completion(workoutData)
+            } else {
+                completion(nil)
+            }
+        } errorHandler: { error in
+            print("❌ [WatchConnectivityManager] Error requesting phone workout: \(error.localizedDescription)")
+            completion(nil)
+        }
+    }
+    
     // MARK: - Metrics Sync
     
     func sendMetrics(_ metrics: [String: Any], workoutType: String) {
@@ -221,6 +248,10 @@ extension WatchConnectivityManager: WCSessionDelegate {
                         object: nil,
                         userInfo: message
                     )
+                case "unitPreferences":
+                    if let useMetric = message["useMetric"] as? Bool {
+                        WatchSettingsManager.shared.updateUnitPreferences(useMetric: useMetric)
+                    }
                 default:
                     break
                 }
@@ -232,6 +263,27 @@ extension WatchConnectivityManager: WCSessionDelegate {
         DispatchQueue.main.async {
             print("📨 [WatchConnectivityManager] Received message with reply handler")
             
+            // Handle specific workout type requests (e.g., "requestActiveRunningWorkout")
+            if let type = message["type"] as? String {
+                if type.hasPrefix("requestActive") && type.hasSuffix("Workout") {
+                    // Check if we have an active workout
+                    if let activeWorkout = WatchWorkoutCoordinator.shared.activeWorkout {
+                        var response = activeWorkout.toDictionary()
+                        response["hasActiveWorkout"] = true
+                        response["status"] = "received"
+                        replyHandler(response)
+                    } else {
+                        replyHandler([
+                            "hasActiveWorkout": false,
+                            "status": "received",
+                            "type": type
+                        ])
+                    }
+                    return
+                }
+            }
+            
+            // Handle generic requests
             if let request = message["request"] as? String {
                 switch request {
                 case "activeWorkout":

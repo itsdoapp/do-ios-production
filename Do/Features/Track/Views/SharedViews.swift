@@ -13,11 +13,22 @@ import MapKit
 
 struct RunSettingsView: View {
     @ObservedObject private var settingsManager = RunSettingsManager.shared
+    @ObservedObject private var userPreferences = UserPreferences.shared
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         NavigationView {
             Form {
+                Section(header: Text("General Preferences")) {
+                    Toggle("Use Metric Units", isOn: $userPreferences.useMetricSystem)
+                    
+                    Picker("Voice Coach", selection: $userPreferences.preferredVoiceType) {
+                        ForEach(UserPreferences.VoiceType.allCases, id: \.self) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                }
+
                 Section(header: Text("Audio & Announcements")) {
                     Toggle("Announce Intervals", isOn: $settingsManager.currentSettings.announceIntervals)
                     Toggle("Play Audio Cues", isOn: $settingsManager.currentSettings.playAudioCues)

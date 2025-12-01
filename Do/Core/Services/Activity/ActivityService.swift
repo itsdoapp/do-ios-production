@@ -45,6 +45,14 @@ class ActivityService {
         return "https://zn2cqidtn77yqxaflrj36kh3di0panyt.lambda-url.us-east-1.on.aws/"
     }
     
+    // Swimming Lambda URLs (can be overridden via UserDefaults)
+    private var saveSwimURL: String {
+        return UserDefaults.standard.string(forKey: "saveSwimURL") ?? "https://jhnf24qivfn74xv6korlm27nry0ebqlj.lambda-url.us-east-1.on.aws/"
+    }
+    private var getSwimsURL: String {
+        return UserDefaults.standard.string(forKey: "getSwimsURL") ?? "https://fpetptummhocdjxaq5aveo63va0kagld.lambda-url.us-east-1.on.aws/"
+    }
+    
     // Lambda Function URLs - Workout Logs (Gym/Exercise-based)
     private let saveMovementLogURL = "https://hejmy66dumue7einkoa47madhu0hyxqo.lambda-url.us-east-1.on.aws/"
     private let getMovementLogsURL = "https://lvta5dkxdpixjuvt2fshj4krci0uvjum.lambda-url.us-east-1.on.aws/"
@@ -477,7 +485,32 @@ class ActivityService {
         userId: String,
         limit: Int = 20,
         nextToken: String? = nil,
+        includeRouteUrls: Bool = true,
+        completion: @escaping (Result<GetActivitiesResponse, Error>) -> Void
+    ) {
+        // Wrapper to match the expected signature - sportType is not used in getAllActivities
+        getSportsWithSportType(userId: userId, limit: limit, nextToken: nextToken, sportType: nil, includeRouteUrls: includeRouteUrls, completion: completion)
+    }
+    
+    /// Get sports activities for a user (with sportType parameter)
+    func getSports(
+        userId: String,
+        limit: Int = 20,
+        nextToken: String? = nil,
         sportType: String? = nil,
+        completion: @escaping (Result<GetActivitiesResponse, Error>) -> Void
+    ) {
+        // Overload that accepts sportType for backward compatibility
+        getSportsWithSportType(userId: userId, limit: limit, nextToken: nextToken, sportType: sportType, includeRouteUrls: true, completion: completion)
+    }
+    
+    /// Get sports activities for a user (internal method with sportType parameter)
+    private func getSportsWithSportType(
+        userId: String,
+        limit: Int = 20,
+        nextToken: String? = nil,
+        sportType: String? = nil,
+        includeRouteUrls: Bool = true,
         completion: @escaping (Result<GetActivitiesResponse, Error>) -> Void
     ) {
         let url = getSportsURL
@@ -1083,6 +1116,31 @@ class ActivityService {
         )
     }
     
+    /// Fetch user's swimming activities from AWS
+    func getSwims(
+        userId: String,
+        limit: Int = 20,
+        nextToken: String? = nil,
+        includeRouteUrls: Bool = true,
+        completion: @escaping (Result<GetActivitiesResponse, Error>) -> Void
+    ) {
+        guard !getSwimsURL.isEmpty else {
+            print("⚠️ GetSwims URL not configured - update UserDefaults with Lambda Function URL")
+            completion(.failure(ActivityError.invalidURL))
+            return
+        }
+        
+        getActivities(
+            url: getSwimsURL,
+            userId: userId,
+            limit: limit,
+            nextToken: nextToken,
+            includeRouteUrls: includeRouteUrls,
+            activityType: "swimming",
+            completion: completion
+        )
+    }
+    
     /// Generic fetch activities method
     private func getActivities(
         url: String,
@@ -1354,21 +1412,118 @@ class ActivityService {
     }
     
     /// Get session logs for a user
+    /// - Parameters:
+    ///   - userId: User ID
+    ///   - limit: Maximum number of logs to return
+    ///   - nextToken: Pagination token
+    ///   - originalSessionId: Filter by original session ID
+    ///   - activityType: Filter by activity type (e.g., "gym", "swimming", "meditation")
+    ///   - completion: Completion handler with result
     func getSessionLogs(
         userId: String,
         limit: Int = 20,
         nextToken: String? = nil,
         originalSessionId: String? = nil,
+        activityType: String? = nil,
         completion: @escaping (Result<GetWorkoutLogsResponse, Error>) -> Void
     ) {
+        var filters: [String: Any] = [:]
+        if let originalSessionId = originalSessionId {
+            filters["originalSessionId"] = originalSessionId
+        }
+        if let activityType = activityType {
+            filters["activityType"] = activityType
+        }
+        
         getWorkoutLogs(
             url: getSessionLogsURL,
             userId: userId,
             limit: limit,
             nextToken: nextToken,
-            filters: ["originalSessionId": originalSessionId as Any],
+            filters: filters,
             completion: completion
         )
+    }
+    
+    /// Get meditation sessions for a user
+    /// Meditation sessions are stored via GenieAPIService, but we can also check session logs
+    /// - Parameters:
+    ///   - userId: User ID
+    ///   - limit: Maximum number of sessions to return
+    ///   - nextToken: Pagination token
+    ///   - completion: Completion handler with result
+    func getMeditations(
+        userId: String,
+        limit: Int = 20,
+        nextToken: String? = nil,
+        completion: @escaping (Result<GetWorkoutLogsResponse, Error>) -> Void
+    ) {
+        // Try to get from session logs first (if meditation sessions are stored there)
+        getSessionLogs(
+            userId: userId,
+            limit: limit,
+            nextToken: nextToken,
+            activityType: "meditation",
+            completion: completion
+        )
+    }
+    
+    /// Get all activities for a user (runs, bikes, hikes, walks, sports, swims)
+    /// This is a convenience method that fetches all activity types
+    func getAllActivities(
+        userId: String,
+        limit: Int = 20,
+        nextToken: String? = nil,
+        includeRouteUrls: Bool = true,
+        completion: @escaping (Result<[AWSActivity], Error>) -> Void
+    ) {
+        var allActivities: [AWSActivity] = []
+        var errors: [Error] = []
+        let dispatchGroup = DispatchGroup()
+        
+        // Fetch all activity types in parallel
+        let activityTypes: [(String, (String, Int, String?, Bool, @escaping (Result<GetActivitiesResponse, Error>) -> Void) -> Void)] = [
+            ("run", getRuns),
+            ("bike", getBikes),
+            ("hike", getHikes),
+            ("walk", getWalks),
+            ("sports", getSports),
+            ("swimming", getSwims)
+        ]
+        
+        for (type, fetchMethod) in activityTypes {
+            dispatchGroup.enter()
+            fetchMethod(userId, limit, nextToken, includeRouteUrls) { result in
+                switch result {
+                case .success(let response):
+                    if let activities = response.data?.activities {
+                        allActivities.append(contentsOf: activities)
+                    }
+                case .failure(let error):
+                    errors.append(error)
+                    print("⚠️ [ActivityService] Error fetching \(type): \(error.localizedDescription)")
+                }
+                dispatchGroup.leave()
+            }
+        }
+        
+        dispatchGroup.notify(queue: .main) {
+            if errors.isEmpty || !allActivities.isEmpty {
+                // Sort by creation date (newest first)
+                allActivities.sort { activity1, activity2 in
+                    let date1 = ISO8601DateFormatter().date(from: activity1.createdAt) ?? Date.distantPast
+                    let date2 = ISO8601DateFormatter().date(from: activity2.createdAt) ?? Date.distantPast
+                    return date1 > date2
+                }
+                
+                // Limit to requested limit
+                let limitedActivities = Array(allActivities.prefix(limit))
+                completion(.success(limitedActivities))
+            } else {
+                // If all failed, return the first error
+                completion(.failure(errors.first ?? ActivityError.fetchFailed("Failed to fetch activities")))
+            }
+        }
     }
     
     /// Save a plan log (user's progress on a workout plan)

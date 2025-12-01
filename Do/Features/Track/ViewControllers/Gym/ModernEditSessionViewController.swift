@@ -69,177 +69,226 @@ struct EditSessionView: View {
         self.onCancel = onCancel
     }
     
+    private var backgroundGradient: LinearGradient {
+        let color1 = Color(red: 0.05, green: 0.05, blue: 0.08)
+        let color2 = Color(red: 0.08, green: 0.08, blue: 0.12)
+        let color3 = Color(red: 0.1, green: 0.1, blue: 0.15)
+        let stops = [
+            Gradient.Stop(color: color1, location: 0),
+            Gradient.Stop(color: color2, location: 0.5),
+            Gradient.Stop(color: color3, location: 1)
+        ]
+        return LinearGradient(
+            gradient: Gradient(stops: stops),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+    
+    private var saveButtonGradient: LinearGradient {
+        let color1 = Color(red: 0.976, green: 0.576, blue: 0.125)
+        let color2 = Color(red: 1.0, green: 0.42, blue: 0.21)
+        return LinearGradient(
+            gradient: Gradient(colors: [color1, color2]),
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+    
+    private var bottomBackgroundGradient: LinearGradient {
+        let baseColor = Color(red: 0.05, green: 0.05, blue: 0.08)
+        let stops = [
+            Gradient.Stop(color: baseColor.opacity(0), location: 0),
+            Gradient.Stop(color: baseColor, location: 0.3),
+            Gradient.Stop(color: baseColor, location: 1)
+        ]
+        return LinearGradient(
+            gradient: Gradient(stops: stops),
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+    
+    @ViewBuilder
+    private var saveButtonBackground: some View {
+        if (draftSession.name?.isEmpty ?? true) || isSaving {
+            Color.gray.opacity(0.3)
+        } else {
+            saveButtonGradient
+        }
+    }
+    
+    // MARK: - Sub-views
+    
+    private var headerView: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "rectangle.stack.fill")
+                .font(.system(size: 48))
+                .foregroundColor(Color(red: 0.976, green: 0.576, blue: 0.125))
+                .padding(.top, 20)
+            
+            Text(sessionToEdit == nil ? "New Session" : "Edit Session")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .padding(.bottom, 8)
+    }
+    
+    private var sessionDetailsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Session Details")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.white.opacity(0.9))
+                .padding(.horizontal, 20)
+            
+            VStack(spacing: 12) {
+                ModernTextField(
+                    title: "Session Name",
+                    text: Binding(
+                        get: { draftSession.name ?? "" },
+                        set: { draftSession.name = $0.isEmpty ? nil : $0 }
+                    ),
+                    placeholder: "e.g., Full Body Workout"
+                )
+                
+                ModernTextEditor(
+                    title: "Description",
+                    placeholder: "Add a description...",
+                    text: Binding(
+                        get: { draftSession.description ?? "" },
+                        set: { draftSession.description = $0.isEmpty ? nil : $0 }
+                    ),
+                    icon: "text.alignleft"
+                )
+                
+                ModernTextField(
+                    title: "Difficulty",
+                    text: Binding(
+                        get: { draftSession.difficulty ?? "" },
+                        set: { draftSession.difficulty = $0.isEmpty ? nil : $0 }
+                    ),
+                    placeholder: "e.g., Intermediate"
+                )
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+    
+    private var durationBinding: Binding<Double> {
+        Binding(
+            get: { Double(draftSession.duration ?? 0) },
+            set: { draftSession.duration = $0 > 0 ? Int($0) : nil }
+        )
+    }
+    
+    private var durationTextField: some View {
+        TextField("0", value: durationBinding, format: .number)
+            .keyboardType(.numberPad)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundColor(.white)
+            .multilineTextAlignment(.trailing)
+            .frame(width: 80)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(8)
+    }
+    
+    private var durationInputRow: some View {
+        HStack {
+            Image(systemName: "clock.fill")
+                .font(.system(size: 18))
+                .foregroundColor(.white.opacity(0.8))
+                .frame(width: 24)
+            
+            Text("Duration (minutes)")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundColor(.white)
+            
+            Spacer()
+            
+            durationTextField
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color.white.opacity(0.1))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+    }
+    
+    private var durationSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Duration")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.white.opacity(0.9))
+                .padding(.horizontal, 20)
+            
+            durationInputRow
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 40)
+    }
+    
+    private var saveButtonSection: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 56)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(16)
+                }
+                
+                Button(action: saveSession) {
+                    if isSaving {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else {
+                        Text("Save")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(saveButtonBackground)
+                .cornerRadius(16)
+                .disabled((draftSession.name?.isEmpty ?? true) || isSaving)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+            .background(bottomBackgroundGradient)
+        }
+    }
+    
+    private var scrollContent: some View {
+        VStack(spacing: 24) {
+            headerView
+            sessionDetailsSection
+            durationSection
+        }
+        .padding(.vertical, 20)
+    }
+    
     var body: some View {
         ZStack {
             // Background gradient
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0),
-                    .init(color: Color(red: 0.08, green: 0.08, blue: 0.12), location: 0.5),
-                    .init(color: Color(red: 0.1, green: 0.1, blue: 0.15), location: 1)
-                ]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .edgesIgnoringSafeArea(.all)
+            backgroundGradient
+                .edgesIgnoringSafeArea(.all)
             
             ScrollView {
-                VStack(spacing: 24) {
-                    // Header
-                    VStack(spacing: 8) {
-                        Image(systemName: "rectangle.stack.fill")
-                            .font(.system(size: 48))
-                            .foregroundColor(Color(red: 0.976, green: 0.576, blue: 0.125))
-                            .padding(.top, 20)
-                        
-                        Text(sessionToEdit == nil ? "New Session" : "Edit Session")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(.white)
-                    }
-                    .padding(.bottom, 8)
-                    
-                    // Session Details Section
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Session Details")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.9))
-                            .padding(.horizontal, 20)
-                        
-                        VStack(spacing: 12) {
-                            ModernTextField(
-                                title: "Session Name",
-                                text: Binding(
-                                    get: { draftSession.name ?? "" },
-                                    set: { draftSession.name = $0.isEmpty ? nil : $0 }
-                                ),
-                                placeholder: "e.g., Full Body Workout"
-                            )
-                            
-                            ModernTextEditor(
-                                title: "Description",
-                                text: Binding(
-                                    get: { draftSession.description ?? "" },
-                                    set: { draftSession.description = $0.isEmpty ? nil : $0 }
-                                ),
-                                placeholder: "Add a description...",
-                                icon: "text.alignleft"
-                            )
-                            
-                            ModernTextField(
-                                title: "Difficulty",
-                                text: Binding(
-                                    get: { draftSession.difficulty ?? "" },
-                                    set: { draftSession.difficulty = $0.isEmpty ? nil : $0 }
-                                ),
-                                placeholder: "e.g., Intermediate"
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Duration Section
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Duration")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.9))
-                            .padding(.horizontal, 20)
-                        
-                        HStack {
-                            Image(systemName: "clock.fill")
-                                .font(.system(size: 18))
-                                .foregroundColor(.white.opacity(0.8))
-                                .frame(width: 24)
-                            
-                            Text("Duration (minutes)")
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundColor(.white)
-                            
-                            Spacer()
-                            
-                            TextField("0", value: Binding(
-                                get: { Double(draftSession.duration ?? 0) },
-                                set: { draftSession.duration = $0 > 0 ? Int($0) : nil }
-                            ), format: .number)
-                            .keyboardType(.numberPad)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 80)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
-                        .background(Color.white.opacity(0.1))
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                        )
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 40)
-                }
-                .padding(.vertical, 20)
+                scrollContent
             }
             
             // Save Button (fixed at bottom)
-            VStack {
-                Spacer()
-                HStack(spacing: 12) {
-                    Button(action: onCancel) {
-                        Text("Cancel")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.8))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 56)
-                            .background(Color.white.opacity(0.1))
-                            .cornerRadius(16)
-                    }
-                    
-                    Button(action: saveSession) {
-                        if isSaving {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Text("Save")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 56)
-                    .background(
-                        (draftSession.name?.isEmpty ?? true) || isSaving
-                            ? Color.gray.opacity(0.3)
-                            : LinearGradient(
-                                gradient: Gradient(colors: [
-                                    Color(red: 0.976, green: 0.576, blue: 0.125),
-                                    Color(red: 1.0, green: 0.42, blue: 0.21)
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                    )
-                    .cornerRadius(16)
-                    .disabled((draftSession.name?.isEmpty ?? true) || isSaving)
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(stops: [
-                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08).opacity(0), location: 0),
-                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0.3),
-                            .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 1)
-                        ]),
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            }
+            saveButtonSection
         }
         .navigationBarTitleDisplayMode(.inline)
         .alert("Error", isPresented: $showError) {

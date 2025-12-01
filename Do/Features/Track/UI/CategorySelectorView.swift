@@ -123,8 +123,8 @@ struct CategorySelectorView: View {
                     .fill(
                         LinearGradient(
                             gradient: Gradient(colors: [
-                                Color(red: 0.1, green: 0.1, blue: 0.2),
-                                Color(red: 0.05, green: 0.05, blue: 0.1)
+                                Color(UIColor(red: 0.06, green: 0.09, blue: 0.24, alpha: 1.0)),
+                                Color.black
                             ]),
                             startPoint: .top,
                             endPoint: .bottom

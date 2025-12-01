@@ -58,33 +58,104 @@ class HikeHistoryViewController: UIViewController {
         
         // Fetch hiking logs from ActivityService
         Task {
-            do {
-                // TODO: Implement actual fetch from ActivityService
-                // For now, using empty array
-                let logs: [HikeLog] = []
-                
+            guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
                 await MainActor.run {
-                    self.hikeLogs = logs
                     self.isLoading = false
-                    // Update hosting controller's view
-                    self.children.forEach { child in
-                        if let hosting = child as? UIHostingController<HikeHistoryView> {
-                            hosting.rootView = HikeHistoryView(
-                                hikeLogs: self.hikeLogs,
-                                isLoading: self.isLoading,
-                                onSelectHike: { [weak self] hike in
-                                    self?.delegate?.didSelectHike(hike)
-                                    self?.dismiss(animated: true)
-                                }
+                }
+                return
+            }
+            
+            ActivityService.shared.getHikes(userId: userId, limit: 100) { [weak self] result in
+                guard let self = self else { return }
+                
+                Task { @MainActor in
+                    switch result {
+                    case .success(let response):
+                        guard let activities = response.data?.activities else {
+                            self.hikeLogs = []
+                            self.isLoading = false
+                            self.updateHostingController()
+                            return
+                        }
+                        
+                        // Convert AWS activities to HikeLog
+                        let logs = activities.compactMap { activity -> HikeLog? in
+                            // Parse date from createdAt string
+                            let formatter = ISO8601DateFormatter()
+                            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                            guard let date = formatter.date(from: activity.createdAt) else {
+                                return nil
+                            }
+                            
+                            // Format duration (convert seconds to HH:MM:SS)
+                            let hours = Int(activity.duration) / 3600
+                            let minutes = (Int(activity.duration) % 3600) / 60
+                            let seconds = Int(activity.duration) % 60
+                            let durationString: String
+                            if hours > 0 {
+                                durationString = String(format: "%d:%02d:%02d", hours, minutes, seconds)
+                            } else {
+                                durationString = String(format: "%d:%02d", minutes, seconds)
+                            }
+                            
+                            // Format distance (convert meters to miles, then to string)
+                            let distanceMiles = activity.distance / 1609.34
+                            let distanceString = String(format: "%.2f mi", distanceMiles)
+                            
+                            // Format elevation gain (convert meters to feet, then to string)
+                            let elevationGainString: String?
+                            if let elevationGain = activity.elevationGain {
+                                let elevationFeet = elevationGain * 3.28084
+                                elevationGainString = String(format: "%.0f ft", elevationFeet)
+                            } else {
+                                elevationGainString = nil
+                            }
+                            
+                            return HikeLog(
+                                id: activity.id,
+                                duration: durationString,
+                                distance: distanceString,
+                                coordinateArray: nil,
+                                avgPace: nil,
+                                paceValues: nil,
+                                createdAt: date,
+                                createdAtFormatted: nil,
+                                createdBy: nil,
+                                netElevation: nil,
+                                elevationGain: elevationGainString,
+                                elevationLoss: nil,
+                                caloriesBurned: activity.calories,
+                                locationData: nil,
+                                routeDataUrl: activity.routeDataUrl
                             )
                         }
+                        
+                        self.hikeLogs = logs
+                        self.isLoading = false
+                        self.updateHostingController()
+                        
+                    case .failure(let error):
+                        print("❌ Error loading hike history: \(error.localizedDescription)")
+                        self.hikeLogs = []
+                        self.isLoading = false
+                        self.updateHostingController()
                     }
                 }
-            } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    print("Error loading hike history: \(error.localizedDescription)")
-                }
+            }
+        }
+    }
+    
+    private func updateHostingController() {
+        self.children.forEach { child in
+            if let hosting = child as? UIHostingController<HikeHistoryView> {
+                hosting.rootView = HikeHistoryView(
+                    hikeLogs: self.hikeLogs,
+                    isLoading: self.isLoading,
+                    onSelectHike: { [weak self] hike in
+                        self?.delegate?.didSelectHike(hike)
+                        self?.dismiss(animated: true)
+                    }
+                )
             }
         }
     }

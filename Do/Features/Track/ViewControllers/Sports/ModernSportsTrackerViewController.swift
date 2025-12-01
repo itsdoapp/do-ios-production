@@ -360,6 +360,7 @@ struct SportsTrackerView: View {
     
     // State properties
     @State private var showingCategorySelector = false
+    @State private var showingSettingsView = false
     @State private var sportsHistoryStats: (sessions: Int, totalTime: TimeInterval, sportsPlayed: Set<String>) = (0, 0, Set())
     @State private var isLoadingStats = false
     
@@ -933,7 +934,7 @@ struct SportsTrackerView: View {
     
     // MARK: - Header Section
     private func headerSection() -> some View {
-        HStack {
+        HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sports")
                     .font(.system(size: 28, weight: .bold))
@@ -946,34 +947,56 @@ struct SportsTrackerView: View {
             
             Spacer()
             
-            // Category Button
-            Button(action: {
-                showingCategorySelector = true
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: "sportscourt")
-                        .font(.system(size: 14, weight: .medium))
-                    Text("Sports")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color(red: 0.976, green: 0.576, blue: 0.125),
-                            Color(red: 0.976, green: 0.576, blue: 0.125).opacity(0.8)
-                        ]),
-                        startPoint: .leading,
-                        endPoint: .trailing
+            HStack {
+                // Category Button
+                Button(action: {
+                    showingCategorySelector = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sportscourt")
+                            .font(.system(size: 14, weight: .medium))
+                        Text("Sports")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                Color(red: 0.976, green: 0.576, blue: 0.125),
+                                Color(red: 0.976, green: 0.576, blue: 0.125).opacity(0.8)
+                            ]),
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                )
-                .cornerRadius(20)
-                .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
             }
+            .padding(.horizontal)
+            
+            // Settings Button
+            Button(action: {
+                showingSettingsView = true
+            }) {
+                Image(systemName: "gear")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(8)
+                    .background(Color.gray.opacity(0.3))
+                    .clipShape(Circle())
+            }
+            .contentShape(Rectangle())
+            .frame(width: 50, height: 50)
+            .buttonStyle(PlainButtonStyle())
         }
         .padding(.horizontal)
+        .padding(.vertical, 8)
+        .sheet(isPresented: $showingSettingsView) {
+            RunSettingsView()
+        }
     }
     
     // MARK: - UI Components

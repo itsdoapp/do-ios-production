@@ -2527,7 +2527,7 @@ struct GymTrackerView: View {
     
     // MARK: - Data Fetching Methods
     
-    private func loadTodayWorkout() {
+     func loadTodayWorkout() {
         guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
         isLoadingTodayWorkout = true
         
@@ -2645,15 +2645,15 @@ struct GymTrackerView: View {
         
         // Otherwise, it's a workout session ID
         // Fetch the session from AWS
-        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<[AWSWorkoutService.WorkoutItem], Error>, Never>) in
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
             AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
                 continuation.resume(returning: result)
             }
         }
         
         switch result {
-        case .success(let items):
-            if let sessionItem = items.first(where: { $0.sessionId == value }) {
+        case .success(let response):
+            if let sessionItem = (response.data ?? []).first(where: { $0.sessionId == value }) {
                 if let session = viewModel.convertToWorkoutSession(from: sessionItem, userId: userId) {
                     return .workout(session)
                 }
@@ -2675,7 +2675,7 @@ struct GymTrackerView: View {
         return nil
     }
     
-    private func loadFeaturedContent() {
+     func loadFeaturedContent() {
         guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
         isLoadingFeatured = true
         
@@ -2713,7 +2713,7 @@ struct GymTrackerView: View {
         }
     }
     
-    private func loadPersonalizedContent() {
+    func loadPersonalizedContent() {
         guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
         isLoadingRecommended = true
         
@@ -7860,7 +7860,7 @@ struct PlanDetailView: View {
             
             switch result {
             case .success(let response):
-                guard let items = response.data else { return nil }
+                guard let items = response.data else { return }
                 if let sessionItem = items.first(where: { $0.sessionId == sessionId }) {
                     var session = workoutSession()
                     session.id = sessionItem.sessionId ?? UUID().uuidString
@@ -8076,7 +8076,7 @@ struct PlanDetailView: View {
         
         switch result {
         case .success(let response):
-            guard let items = response.data else { return nil }
+            let items = response.data ?? []
             if let sessionItem = items.first(where: { $0.sessionId == sessionId }) {
                 return convertToWorkoutSession(from: sessionItem, userId: userId)
             }

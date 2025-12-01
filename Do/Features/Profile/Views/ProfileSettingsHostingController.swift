@@ -36,13 +36,33 @@ final class ProfileSettingsHostingController: UIViewController {
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // Refresh user data from CurrentUserService if available
-        if let currentUserId = CurrentUserService.shared.userID,
-           currentUserId == user.userID {
+        // Always refresh user data from CurrentUserService if available
+        if let currentUserId = CurrentUserService.shared.userID {
+            print("🔄 [ProfileSettings] viewWillAppear - Refreshing user data")
             // Update user model with latest from CurrentUserService
-            self.user = CurrentUserService.shared.user
-            // Reload data if view model exists
-            viewModel?.loadUserData()
+            let currentUser = CurrentUserService.shared.user
+            print("   - CurrentUserService userID: \(currentUserId)")
+            print("   - CurrentUserService name: \(currentUser.name ?? "nil")")
+            print("   - CurrentUserService userName: \(currentUser.userName ?? "nil")")
+            print("   - CurrentUserService email: \(currentUser.email ?? "nil")")
+            
+            // Update the user model
+            self.user = currentUser
+            
+            // If view model exists, update it and reload data
+            if let vm = viewModel {
+                // Re-initialize with fresh user data
+                vm.user = currentUser
+                // Re-initialize fields from the updated user model
+                vm.name = currentUser.name ?? ""
+                vm.username = currentUser.userName ?? ""
+                vm.bio = currentUser.bio ?? ""
+                vm.email = currentUser.email ?? ""
+                vm.isPrivateAccount = currentUser.privacyToggle ?? false
+                
+                // Reload from API to get latest data
+                vm.loadUserData()
+            }
         }
     }
 
