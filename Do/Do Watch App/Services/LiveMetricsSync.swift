@@ -72,6 +72,9 @@ class LiveMetricsSync: ObservableObject {
             "timestamp": Date().timeIntervalSince1970
         ]
         
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: workout.workoutType.rawValue.uppercased(), direction: "watchToPhone", data: message)
+        
         connectivityManager.sendMessage(message) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.lastSyncTime = Date()
@@ -81,6 +84,7 @@ class LiveMetricsSync: ObservableObject {
             DispatchQueue.main.async {
                 self?.isSyncing = false
                 print("❌ [LiveMetricsSync] Sync error: \(error.localizedDescription)")
+                TrackingTestLogger.shared.logError(category: workout.workoutType.rawValue.uppercased(), message: "Sync error", error: error)
                 // Handle network interruption
                 self?.handleNetworkInterruption()
             }
@@ -169,6 +173,9 @@ class LiveMetricsSync: ObservableObject {
               var workout = WatchWorkoutCoordinator.shared.activeWorkout else {
             return
         }
+        
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: workout.workoutType.rawValue.uppercased(), direction: "phoneToWatch", data: metricsDict)
         
         // Merge with existing metrics
         workout.metrics = MetricsHandoffService.shared.mergeMetrics(

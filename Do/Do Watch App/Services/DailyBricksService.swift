@@ -355,7 +355,13 @@ class DailyBricksService: ObservableObject {
             // Count unique meal types (breakfast, lunch, dinner, snack)
             let mealTypes = Set(todayFoods.compactMap { $0.mealType })
             mealCount = Double(mealTypes.count)
+            
+            // Test logging
+            TrackingTestLogger.shared.logInfo(category: "FOOD", message: "Read \(foods.count) total entries, \(todayFoods.count) today, \(mealTypes.count) unique meal types from AppGroup")
         } else {
+            // Test logging
+            TrackingTestLogger.shared.logInfo(category: "FOOD", message: "No food data in AppGroup, requesting from phone")
+            
             // Fallback: Request from phone via WatchConnectivity
             mealCount = await requestMealCountFromPhone(startOfDay: startOfDay, now: now)
         }
@@ -473,6 +479,13 @@ class DailyBricksService: ObservableObject {
     private func getAppWorkoutMinutes(startOfDay: Date, now: Date) async -> Double {
         // Request workout logs from phone via WatchConnectivity
         return await withCheckedContinuation { continuation in
+            var hasResumed = false
+            let resumeOnce: (Double) -> Void = { value in
+                guard !hasResumed else { return }
+                hasResumed = true
+                continuation.resume(returning: value)
+            }
+            
             let message: [String: Any] = [
                 "type": "requestDailyBricksData",
                 "dataType": "workoutMinutes",
@@ -482,12 +495,12 @@ class DailyBricksService: ObservableObject {
             
             WatchConnectivityManager.shared.sendMessage(message) { response in
                 if let minutes = response["workoutMinutes"] as? Double {
-                    continuation.resume(returning: minutes)
+                    resumeOnce(minutes)
                 } else {
-                    continuation.resume(returning: 0.0)
+                    resumeOnce(0.0)
                 }
             } errorHandler: { _ in
-                continuation.resume(returning: 0.0)
+                resumeOnce(0.0)
             }
         }
     }
@@ -495,6 +508,13 @@ class DailyBricksService: ObservableObject {
     private func getAppStrengthWorkoutData(startOfDay: Date, now: Date) async -> (minutes: Double, hasSession: Bool) {
         // Request gym workout data from phone
         return await withCheckedContinuation { continuation in
+            var hasResumed = false
+            let resumeOnce: (Double, Bool) -> Void = { minutes, hasSession in
+                guard !hasResumed else { return }
+                hasResumed = true
+                continuation.resume(returning: (minutes, hasSession))
+            }
+            
             let message: [String: Any] = [
                 "type": "requestDailyBricksData",
                 "dataType": "strengthWorkout",
@@ -505,9 +525,9 @@ class DailyBricksService: ObservableObject {
             WatchConnectivityManager.shared.sendMessage(message) { response in
                 let minutes = response["strengthMinutes"] as? Double ?? 0.0
                 let hasSession = response["hasStrengthSession"] as? Bool ?? false
-                continuation.resume(returning: (minutes, hasSession))
+                resumeOnce(minutes, hasSession)
             } errorHandler: { _ in
-                continuation.resume(returning: (0.0, false))
+                resumeOnce(0.0, false)
             }
         }
     }
@@ -516,6 +536,13 @@ class DailyBricksService: ObservableObject {
     
     private func requestMealCountFromPhone(startOfDay: Date, now: Date) async -> Double {
         return await withCheckedContinuation { continuation in
+            var hasResumed = false
+            let resumeOnce: (Double) -> Void = { value in
+                guard !hasResumed else { return }
+                hasResumed = true
+                continuation.resume(returning: value)
+            }
+            
             let message: [String: Any] = [
                 "type": "requestDailyBricksData",
                 "dataType": "mealCount",
@@ -525,12 +552,12 @@ class DailyBricksService: ObservableObject {
             
             WatchConnectivityManager.shared.sendMessage(message) { response in
                 if let mealCount = response["mealCount"] as? Double {
-                    continuation.resume(returning: mealCount)
+                    resumeOnce(mealCount)
                 } else {
-                    continuation.resume(returning: 0.0)
+                    resumeOnce(0.0)
                 }
             } errorHandler: { _ in
-                continuation.resume(returning: 0.0)
+                resumeOnce(0.0)
             }
         }
     }

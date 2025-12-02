@@ -53,6 +53,10 @@ class HikeTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
         didSet {
             updateFormattedValues()
             print("📱 Updated hikeState: \(oldValue) => \(hikeState)")
+            
+            // Test logging
+            TrackingTestLogger.shared.logStateChange(category: "HIKING", oldState: oldValue.rawValue, newState: hikeState.rawValue)
+            
             NotificationCenter.default.post(name: .didUpdateHikeState, object: nil)
         }
     }
@@ -253,6 +257,13 @@ class HikeTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
         if hikeState == .notStarted || hikeState == .ready || hikeState == .paused {
             // If this is the first transition into inProgress, set startDate
             if startDate == nil { startDate = Date() }
+            
+            // Request location permissions for workout tracking (needs "Always" for background)
+            if !isIndoorMode {
+                print("📍 Requesting location permissions for outdoor hike tracking")
+                ModernLocationManager.shared.requestWorkoutLocationAuthorization()
+            }
+            
             hikeState = .inProgress
             WorkoutBackgroundManager.shared.registerWorkout(type: "hike", engine: self)
             if hikeState == .notStarted {
@@ -887,6 +898,11 @@ extension HikeTrackingEngine {
                 isPrimaryForHeartRate = false // Watch still better for HR
                 isPrimaryForCalories = true   // Phone can calculate calories with distance
                 isPrimaryForCadence = false   // Watch better for cadence
+                
+                // Test logging
+                TrackingTestLogger.shared.logCoordination(category: "HIKING", metric: "distance", primaryDevice: "phone", reason: "GPS-based tracking")
+                TrackingTestLogger.shared.logCoordination(category: "HIKING", metric: "elevationGain", primaryDevice: "phone", reason: "GPS-based elevation")
+                TrackingTestLogger.shared.logCoordination(category: "HIKING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
                 
                 print("📱 Outdoor hike with good GPS: Phone primary for distance/pace")
                 print("⌚️ Watch primary for heart rate and cadence")

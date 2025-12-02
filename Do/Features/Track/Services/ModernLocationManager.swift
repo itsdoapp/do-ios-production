@@ -248,14 +248,58 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     func requestAlwaysAuthorization() {
         // Check authorization status first to avoid unnecessary calls
         let currentStatus = manager.authorizationStatus
-        guard currentStatus == .notDetermined || currentStatus == .authorizedWhenInUse else {
-            print("📍 Authorization status: \(currentStatus.rawValue), skipping always request")
+        
+        if currentStatus == .authorizedAlways {
+            print("📍 Already authorized for always location access")
             return
         }
-        // Dispatch to main thread to avoid UI unresponsiveness warning
-        DispatchQueue.main.async { [weak self] in
-            self?.manager.requestAlwaysAuthorization()
+        
+        if currentStatus == .notDetermined {
+            // First request "When In Use", then request "Always" after it's granted
+            print("📍 Authorization not determined - requesting when-in-use first")
+            requestWhenInUseAuthorization()
+            // Wait for authorization callback, then request "Always"
+            return
         }
+        
+        if currentStatus == .authorizedWhenInUse {
+            // Request "Always" authorization
+            print("📍 Requesting always authorization for background workout tracking")
+            DispatchQueue.main.async { [weak self] in
+                self?.manager.requestAlwaysAuthorization()
+            }
+            return
+        }
+        
+        print("📍 Cannot request always authorization - current status: \(currentStatus.rawValue)")
+    }
+    
+    /// Request location authorization for workout tracking (requests "Always" if needed)
+    func requestWorkoutLocationAuthorization() {
+        let currentStatus = manager.authorizationStatus
+        
+        if currentStatus == .authorizedAlways {
+            print("📍 Already authorized for always location - ready for workout tracking")
+            return
+        }
+        
+        if currentStatus == .notDetermined {
+            // Request "When In Use" first, then "Always" will be requested in the callback
+            print("📍 Requesting location authorization for workout tracking")
+            requestWhenInUseAuthorization()
+            return
+        }
+        
+        if currentStatus == .authorizedWhenInUse {
+            // Request upgrade to "Always" for background tracking
+            print("📍 Upgrading to always authorization for background workout tracking")
+            DispatchQueue.main.async { [weak self] in
+                self?.manager.requestAlwaysAuthorization()
+            }
+            return
+        }
+        
+        print("⚠️ Cannot request workout location authorization - status: \(currentStatus.rawValue)")
     }
     
     func startUpdatingLocation() {
@@ -270,21 +314,74 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             return
         }
         
-        // CRITICAL: Don't start location updates if authorization is notDetermined
+        // CRITICAL: Check and request authorization if needed
+        let authStatus = manager.authorizationStatus
+        if authStatus == .notDetermined {
+            print("📍 Authorization not determined - requesting workout location authorization")
+            // For workouts, we want "Always" authorization
+            if isTracking {
+                requestWorkoutLocationAuthorization()
+            } else {
+                requestWhenInUseAuthorization()
+            }
+            // Wait a moment for the authorization dialog to appear
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.checkAndStartLocationUpdates()
+            }
+            return
+        }
+        
+        // If we're tracking and only have "When In Use", request "Always"
+        if isTracking && authStatus == .authorizedWhenInUse {
+            print("📍 Tracking active but only have 'When In Use' - requesting 'Always' authorization")
+            manager.requestAlwaysAuthorization()
+            // Still start location (will work in foreground)
+            checkAndStartLocationUpdates()
+            return
+        }
+        
+        guard authStatus == .authorizedWhenInUse || authStatus == .authorizedAlways else {
+            print("⚠️ Cannot start location updates: authorization status is \(authStatus.rawValue) (denied=2, restricted=1)")
+            print("⚠️ Please enable location permissions in Settings")
+            return
+        }
+        
+        checkAndStartLocationUpdates()
+    }
+    
+    private func checkAndStartLocationUpdates() {
         let authStatus = manager.authorizationStatus
         guard authStatus == .authorizedWhenInUse || authStatus == .authorizedAlways else {
-            print("⚠️ Cannot start location updates: authorization status is \(authStatus.rawValue) (notDetermined=0, denied=2, restricted=1)")
-            if authStatus == .notDetermined {
-                print("ℹ️ Request authorization first before starting location updates")
-            }
+            print("⚠️ Still not authorized after request: \(authStatus.rawValue)")
             return
         }
         
         // Ensure delegate is set correctly
         if manager.delegate !== self {
+            print("📍 Setting delegate to self")
             manager.delegate = self
         }
+        
+        // Configure for background tracking if needed
+        // CRITICAL: Only enable background location updates if we have "Always" authorization
+        if isTracking {
+            if authStatus == .authorizedAlways {
+                manager.allowsBackgroundLocationUpdates = true
+                manager.pausesLocationUpdatesAutomatically = false
+                print("📍 Background location updates enabled for tracking (Always authorized)")
+            } else {
+                // Can't use background with "When In Use" - but still track in foreground
+                manager.allowsBackgroundLocationUpdates = false
+                manager.pausesLocationUpdatesAutomatically = false
+                print("⚠️ Only 'When In Use' authorized - background tracking not available")
+                print("⚠️ Requesting 'Always' authorization for background tracking...")
+                manager.requestAlwaysAuthorization()
+            }
+        }
+        
+        print("📍 Starting location updates with status: \(authStatus.rawValue)")
         manager.startUpdatingLocation()
+        isLocationActive = true
         scheduleWatchdog()
     }
     
@@ -530,22 +627,57 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             print("📍 Authorization changed: \(oldStatus.rawValue) → \(manager.authorizationStatus.rawValue)")
             
             switch manager.authorizationStatus {
-            case .authorizedWhenInUse, .authorizedAlways:
-                print("📍 [SMART] Authorization granted - waiting for explicit request")
+            case .authorizedWhenInUse:
+                print("📍 [SMART] Authorization granted: When In Use")
                 // CRITICAL: Force delegate to self
                 if manager.delegate !== self {
                     print("⚠️ Delegate was hijacked! Forcing back to self")
                     manager.delegate = self
                 }
-                // DON'T auto-start location - use smart location management
-                // Only start if there's an active usage reason
-                if !activeUsageReasons.isEmpty {
-                    print("📍 [SMART] Active reasons exist, starting location")
-                    self.startUpdatingLocation()
-                }
+                
+                // If we're tracking a workout, request "Always" authorization for background tracking
                 if self.isTracking {
-                    manager.allowsBackgroundLocationUpdates = true
+                    print("📍 [SMART] Tracking active but only have 'When In Use' - requesting 'Always' for background tracking")
+                    manager.requestAlwaysAuthorization()
+                    // Still start location updates for now (will work in foreground)
+                    manager.allowsBackgroundLocationUpdates = false // Can't use background with "When In Use"
                     manager.pausesLocationUpdatesAutomatically = false
+                    if !self.isLocationActive {
+                        manager.startUpdatingLocation()
+                        self.isLocationActive = true
+                    }
+                } else if !activeUsageReasons.isEmpty {
+                    // Start location for active reasons
+                    if !self.isLocationActive {
+                        manager.startUpdatingLocation()
+                        self.isLocationActive = true
+                    }
+                }
+                
+            case .authorizedAlways:
+                print("📍 [SMART] Authorization granted: Always (background tracking enabled)")
+                // CRITICAL: Force delegate to self
+                if manager.delegate !== self {
+                    print("⚠️ Delegate was hijacked! Forcing back to self")
+                    manager.delegate = self
+                }
+                
+                // If we have active usage reasons or are tracking, start location
+                if !activeUsageReasons.isEmpty || self.isTracking {
+                    print("📍 [SMART] Active reasons exist or tracking active, starting location")
+                    // Configure for background if tracking
+                    if self.isTracking {
+                        manager.allowsBackgroundLocationUpdates = true
+                        manager.pausesLocationUpdatesAutomatically = false
+                        print("📍 Background location enabled for tracking")
+                    }
+                    // Start location updates
+                    if !self.isLocationActive {
+                        manager.startUpdatingLocation()
+                        self.isLocationActive = true
+                    }
+                } else {
+                    print("📍 [SMART] No active reasons, location will start when needed")
                 }
             default:
                 print("📍 Authorization not granted: \(manager.authorizationStatus.rawValue)")
@@ -576,22 +708,60 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                 print("📍 Accuracy: \(location.horizontalAccuracy)m")
                 print("📍 Is first location: \(self.location == nil)")
                 
-                // CRITICAL: Accept first location regardless of accuracy
-                // For subsequent locations, apply accuracy and time filtering
+                // CRITICAL: Always update the published location property so UI can see it
+                // This is needed for Weather cards, routes, maps, etc. - not just active tracking
+                // But only process for distance/tracking calculations if it passes quality filters
                 let isFirstLocation = self.location == nil
                 let hasGoodAccuracy = location.horizontalAccuracy <= 20 || (isWithinWarmup && location.horizontalAccuracy <= 65)
                 let enoughTimePassed = timeSinceLastUpdate >= self.locationUpdateThrottleInterval
                 
+                // For UI updates (Weather, Routes, Maps), accept locations with reasonable accuracy
+                // Be more lenient than distance calculations - accept up to 100m for UI visibility
+                let acceptableForUI = isFirstLocation || location.horizontalAccuracy <= 100
+                
+                // ALWAYS update the published location for UI visibility if accuracy is reasonable
+                // This ensures Weather cards, routes, maps, etc. always have current location
+                if acceptableForUI {
+                    // Update the published location property immediately for UI
+                    self.location = location
+                    self.lastLocation = location
+                    
+                    // Update region if significant movement
+                    let currentCenter = self.region.center
+                    let distance = CLLocation(latitude: currentCenter.latitude, longitude: currentCenter.longitude)
+                        .distance(from: CLLocation(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude))
+                    
+                    if distance > 50 {
+                        self.region = MKCoordinateRegion(
+                            center: location.coordinate,
+                            span: self.region.span
+                        )
+                    }
+                    
+                    // Post notification for location update (used by Weather, Routes, etc.)
+                    NotificationCenter.default.post(
+                        name: .locationDidUpdate,
+                        object: self,
+                        userInfo: ["location": location]
+                    )
+                }
+                
+                // Only process for distance/tracking calculations if it passes all filters
+                // This prevents spam in distance calculations while UI stays updated
                 if isFirstLocation {
                     print("📍 First location received: accuracy=\(location.horizontalAccuracy)m")
                     self.lastProcessedLocationTime = now
                     self.processLocationUpdate(location)
                 } else if hasGoodAccuracy && enoughTimePassed {
-                    print("📍 Subsequent location accepted")
+                    print("📍 Subsequent location accepted for tracking")
                     self.lastProcessedLocationTime = now
                     self.processLocationUpdate(location)
                 } else {
-                    print("📍 Location rejected: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    if acceptableForUI {
+                        print("📍 Location visible in UI (accuracy=\(location.horizontalAccuracy)m) but skipped for distance calculation: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    } else {
+                        print("📍 Location rejected: accuracy=\(location.horizontalAccuracy)m too poor for UI")
+                    }
                 }
             }
         }
@@ -748,31 +918,15 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         calories = (totalDistance / 1000.0) * caloriesPerKm
     }
     
-    // Process location update after validation
+    // Process location update after validation (for distance/tracking calculations)
     private func processLocationUpdate(_ location: CLLocation) {
-        // Pre-calculate values to minimize work
-        let currentCenter = self.region.center
-        let newCenter = location.coordinate
-        let distance = CLLocation(latitude: currentCenter.latitude, longitude: currentCenter.longitude)
-            .distance(from: CLLocation(latitude: newCenter.latitude, longitude: newCenter.longitude))
-        
-        let shouldUpdateRegion = distance > 50 // If more than 50 meters from center
-        let newRegion = shouldUpdateRegion ? MKCoordinateRegion(
-            center: location.coordinate,
-            span: self.region.span // Keep the current zoom level
-        ) : self.region
-        
-        // Update location and region
-        self.location = location
+        // Note: location property is already updated in didUpdateLocations for UI visibility
+        // This method only handles distance/tracking calculations
         
         // Cache the last known location for fallback use when location permission is denied
         UserDefaults.standard.set(location.coordinate.latitude, forKey: "lastKnownLatitude")
         UserDefaults.standard.set(location.coordinate.longitude, forKey: "lastKnownLongitude")
         UserDefaults.standard.synchronize()
-        
-        if shouldUpdateRegion {
-            self.region = newRegion
-        }
         
         // Only update tracking-related metrics if we're tracking
         if self.isTracking {

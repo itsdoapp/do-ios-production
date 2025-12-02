@@ -28,5 +28,16 @@
 	<string>We need access to your health data to track your workouts and activities</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>We need to update your health data with workout information, including distance, heart rate, and calories burned</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>We need your location to track your workouts, calculate distance, pace, and show your route on the map</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>We need your location to track your workouts in the background, calculate distance, pace, and show your route on the map</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>We need your location to track your workouts in the background, calculate distance, pace, and show your route on the map</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>processing</string>
+	</array>
 </dict>
 </plist>

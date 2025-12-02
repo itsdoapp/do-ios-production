@@ -34,6 +34,9 @@ class MeditationTrackingService: ObservableObject {
         guided: Bool = false,
         notes: String? = nil
     ) {
+        // Test logging
+        TrackingTestLogger.shared.logTestStart(category: "MEDITATION", scenario: "Phone Only")
+        
         let session = MeditationSession(
             id: UUID().uuidString,
             userId: getCurrentUserId(),
@@ -47,15 +50,23 @@ class MeditationTrackingService: ObservableObject {
         
         currentSession = session
         
+        // Test logging - coordination
+        TrackingTestLogger.shared.logCoordination(category: "MEDITATION", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
+        
         // Start timer
         sessionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateSessionDuration()
         }
         
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: "MEDITATION", oldState: "notStarted", newState: "active")
+        
         print("🧘 [Meditation] Started: \(type.name) - \(Int(duration/60))min")
     }
     
     func completeSession(rating: Int? = nil, notes: String? = nil) async throws {
+        // Test logging
+        TrackingTestLogger.shared.logTestEnd(category: "MEDITATION")
         guard var session = currentSession else { return }
         
         sessionTimer?.invalidate()

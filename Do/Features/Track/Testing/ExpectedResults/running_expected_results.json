@@ -1,0 +1,81 @@
+{
+  "category": "Running",
+  "requiredMetrics": [
+    "distance",
+    "elapsedTime",
+    "pace",
+    "calories",
+    "heartRate",
+    "elevationGain",
+    "cadence",
+    "strideLength"
+  ],
+  "expectedCoordination": {
+    "outdoor": [
+      {
+        "metric": "distance",
+        "primaryDevice": "phone",
+        "reason": "GPS-based outdoor tracking"
+      },
+      {
+        "metric": "pace",
+        "primaryDevice": "phone",
+        "reason": "Calculated from GPS distance"
+      },
+      {
+        "metric": "heartRate",
+        "primaryDevice": "watch",
+        "reason": "Watch has better HR sensors"
+      },
+      {
+        "metric": "cadence",
+        "primaryDevice": "watch",
+        "reason": "Watch better for step detection"
+      }
+    ],
+    "indoor": [
+      {
+        "metric": "distance",
+        "primaryDevice": "watch",
+        "reason": "Indoor tracking, no GPS"
+      },
+      {
+        "metric": "heartRate",
+        "primaryDevice": "watch",
+        "reason": "Watch has better HR sensors"
+      },
+      {
+        "metric": "cadence",
+        "primaryDevice": "watch",
+        "reason": "Watch better for step detection"
+      }
+    ]
+  },
+  "syncFrequency": 2.0,
+  "expectedSyncInterval": {
+    "min": 1.5,
+    "max": 3.0
+  },
+  "metricRanges": {
+    "distance": {
+      "min": 0,
+      "unit": "meters"
+    },
+    "pace": {
+      "min": 180,
+      "max": 1800,
+      "unit": "seconds per km"
+    },
+    "heartRate": {
+      "min": 40,
+      "max": 220,
+      "unit": "bpm"
+    },
+    "cadence": {
+      "min": 0,
+      "max": 300,
+      "unit": "steps per minute"
+    }
+  }
+}
+

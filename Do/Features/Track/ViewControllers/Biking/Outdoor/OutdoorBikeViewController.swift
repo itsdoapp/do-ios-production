@@ -3233,9 +3233,12 @@ class OutdoorBikeViewController: UIViewController, CLLocationManagerDelegate, MK
                                            mode: .spokenAudio,
                                            options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
                 
-                // Set optimal audio quality settings
+                // Set optimal audio quality settings (matching old DOIOS implementation)
                 try audioSession.setPreferredSampleRate(48000.0)  // High quality sample rate
                 try audioSession.setPreferredIOBufferDuration(0.01) // Low latency for responsive speech
+                
+                // CRITICAL: Set stereo output for better audio quality (from old DOIOS)
+                try audioSession.setPreferredOutputNumberOfChannels(2)
             }
             
             // Activate with high priority if not already active
@@ -3243,7 +3246,7 @@ class OutdoorBikeViewController: UIViewController, CLLocationManagerDelegate, MK
                 try audioSession.setActive(true, options: [])
             }
             
-            print("🔊 Audio session optimized for realistic speech")
+            print("🔊 Audio session optimized for realistic speech (stereo, 48kHz)")
         } catch {
             print("❌ Failed to configure premium audio session: \(error.localizedDescription)")
             // Fallback to basic configuration
@@ -3255,8 +3258,12 @@ class OutdoorBikeViewController: UIViewController, CLLocationManagerDelegate, MK
         do {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+            
+            // Still try to set stereo output even in fallback
+            try? audioSession.setPreferredOutputNumberOfChannels(2)
+            
             try audioSession.setActive(true)
-            print("🔊 Using fallback audio session configuration")
+            print("🔊 Using fallback audio session configuration (stereo)")
         } catch {
             print("❌ Failed to configure fallback audio session: \(error.localizedDescription)")
         }

@@ -50,7 +50,11 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
 
     // MARK: - State
     @Published var state: WalkState = .notStarted {
-        didSet { NotificationCenter.default.post(name: .didUpdateWalkState, object: nil) }
+        didSet {
+            // Test logging
+            TrackingTestLogger.shared.logStateChange(category: "WALKING", oldState: oldValue.rawValue, newState: state.rawValue)
+            NotificationCenter.default.post(name: .didUpdateWalkState, object: nil)
+        }
     }
     @Published var walkingType: WalkingEngineType = .outdoorWalk
     // Compatibility with controllers that use RunType for walking
@@ -143,6 +147,16 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
     // MARK: - Control
     func start() {
         guard state == .notStarted || state == .ready else { return }
+        
+        // Test logging
+        TrackingTestLogger.shared.logTestStart(category: "WALKING", scenario: "Phone Only")
+        
+        // Request location permissions for workout tracking (needs "Always" for background)
+        if !isIndoorMode {
+            print("📍 Requesting location permissions for outdoor walk tracking")
+            ModernLocationManager.shared.requestWorkoutLocationAuthorization()
+        }
+        
         state = .inProgress
         startTime = Date()
         startTiming()
@@ -617,6 +631,9 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
     func updateMetricsFromWatch(_ metrics: [String: Any]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            
+            // Test logging
+            TrackingTestLogger.shared.logSyncEvent(category: "WALKING", direction: "watchToPhone", data: metrics)
             
             // Always accept heart rate from watch (watch is always primary for HR)
             if let heartRate = metrics["heartRate"] as? Double, heartRate > 0 {
@@ -1466,6 +1483,11 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
                 isPrimaryForHeartRate = false // Watch still better for HR
                 isPrimaryForCalories = true   // Phone can calculate calories with distance
                 isPrimaryForCadence = false   // Watch better for cadence
+                
+                // Test logging
+                TrackingTestLogger.shared.logCoordination(category: "WALKING", metric: "distance", primaryDevice: "phone", reason: "GPS-based outdoor tracking")
+                TrackingTestLogger.shared.logCoordination(category: "WALKING", metric: "steps", primaryDevice: "watch", reason: "Watch better for step counting")
+                TrackingTestLogger.shared.logCoordination(category: "WALKING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
                 
                 print("📱 Outdoor walk with good GPS: Phone primary for distance/pace")
                 print("⌚️ Watch primary for heart rate and cadence")

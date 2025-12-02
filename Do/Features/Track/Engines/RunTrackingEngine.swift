@@ -91,6 +91,9 @@ class RunTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, WorkoutE
             // Log state changes
             print("📱 Updated runState: \(oldValue) => \(runState)")
             
+            // Test logging
+            TrackingTestLogger.shared.logStateChange(category: "RUNNING", oldState: oldValue.rawValue, newState: runState.rawValue)
+            
             // Post notification for state change
             NotificationCenter.default.post(name: .didUpdateRunState, object: nil)
         }
@@ -369,6 +372,9 @@ class RunTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, WorkoutE
     
     // Add this property with the other class properties
     private var receivedWatchStatusUpdate: Bool = false
+    
+    // Test logging throttling
+    private var lastMetricLogTime: TimeInterval = 0
     
     // MARK: - Computed Properties
     
@@ -1553,6 +1559,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         
         // Handle incoming metrics from watch
         if let metrics = message["metrics"] as? [String: Any] {
+            // Test logging
+            TrackingTestLogger.shared.logSyncEvent(category: "RUNNING", direction: "watchToPhone", data: metrics)
+            
             // Process metrics using coordinator
             metricsCoordinator?.processWatchMetrics(metrics: metrics)
             
@@ -2200,12 +2209,17 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         let audioSession = AVAudioSession.sharedInstance()
         
         do {
-            // Configure audio session with simpler settings that work reliably
+            // Configure audio session with optimal settings for speech during running
+            // Use .spokenAudio mode for better speech quality (matching old DOIOS)
             try audioSession.setCategory(.playback, 
-                                         mode: .default, 
-                                         options: [.mixWithOthers])
+                                         mode: .spokenAudio, 
+                                         options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
             
-            // Set preferred number of channels to 2 for stereo output
+            // Set optimal audio quality settings
+            try audioSession.setPreferredSampleRate(48000.0)  // High quality sample rate
+            try audioSession.setPreferredIOBufferDuration(0.01) // Low latency
+            
+            // Set preferred number of channels to 2 for stereo output (critical for quality)
             try audioSession.setPreferredOutputNumberOfChannels(2)
             
             // Activate the audio session
@@ -2278,6 +2292,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     }
     
     private func startNewRun() {
+        // Test logging
+        TrackingTestLogger.shared.logTestStart(category: "RUNNING", scenario: isIndoorMode ? "Indoor Run" : "Outdoor Run")
+        
         // 🔧 CRITICAL FIX: Initialize parseObject for database save
    
         // 🔧 FIX: Only reset metrics if NOT joining an existing workout
@@ -2313,6 +2330,12 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             
             // Don't reset collections as they may contain existing data
             // Don't reset startDate as it should be set from the watch workout
+        }
+        
+        // Request location permissions for workout tracking (needs "Always" for background)
+        if !isIndoorMode {
+            print("📍 Requesting location permissions for outdoor run tracking")
+            ModernLocationManager.shared.requestWorkoutLocationAuthorization()
         }
         
         // Update state
@@ -2580,6 +2603,12 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             isPrimaryForCalories = false
             isPrimaryForCadence = false
             
+            // Test logging
+            TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "distance", primaryDevice: "watch", reason: "Indoor tracking, no GPS")
+            TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "pace", primaryDevice: "watch", reason: "Indoor tracking, no GPS")
+            TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
+            TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "cadence", primaryDevice: "watch", reason: "Watch better for step detection")
+            
             print("📱 Indoor run: Phone acting as dashboard for treadmill run")
             print("⌚️ Watch will be primary for all tracking metrics")
         } else {
@@ -2594,6 +2623,12 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
                 isPrimaryForHeartRate = false // Watch still better for HR
                 isPrimaryForCalories = true   // Phone can calculate calories with distance
                 isPrimaryForCadence = false   // Watch better for cadence
+                
+                // Test logging
+                TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "distance", primaryDevice: "phone", reason: "GPS-based outdoor tracking")
+                TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "pace", primaryDevice: "phone", reason: "Calculated from GPS distance")
+                TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
+                TrackingTestLogger.shared.logCoordination(category: "RUNNING", metric: "cadence", primaryDevice: "watch", reason: "Watch better for step detection")
                 
                 print("📱 Outdoor run with good GPS: Phone primary for distance/pace")
                 print("⌚️ Watch primary for heart rate and cadence")
@@ -2737,6 +2772,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     public func endRun() {
         // Only end if running or paused
         guard runState == .running || runState == .paused else { return }
+        
+        // Test logging
+        TrackingTestLogger.shared.logTestEnd(category: "RUNNING")
         
         // Update state
         runState = .completed
@@ -2987,6 +3025,13 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
                 let paceValue = useMetric ? paceSecondsPerKm : paceSecondsPerKm * 1.60934
                 // Use the correct unit based on user preference
                 pace = Measurement(value: paceValue, unit: useMetric ? UnitSpeed.minutesPerKilometer : UnitSpeed.minutesPerMile)
+                
+                // Test logging - log pace updates periodically (every 5 seconds to avoid spam)
+                let currentTime = Date().timeIntervalSince1970
+                if lastMetricLogTime == 0 || currentTime - lastMetricLogTime >= 5.0 {
+                    TrackingTestLogger.shared.logMetricUpdate(device: isPrimaryForPace ? "PHONE" : "WATCH", category: "RUNNING", metric: "pace", value: paceValue, source: isPrimaryForPace ? "primary" : "fallback")
+                    lastMetricLogTime = currentTime
+                }
             }
         }
         
@@ -4038,10 +4083,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     }
     
     private func requestPermissions() {
-        // Request location permissions
+        // Request location permissions for workout tracking (needs "Always" for background)
         // Use ModernLocationManager to avoid UI unresponsiveness warnings
-        ModernLocationManager.shared.requestWhenInUseAuthorization()
-        ModernLocationManager.shared.requestAlwaysAuthorization()
+        ModernLocationManager.shared.requestWorkoutLocationAuthorization()
         
         // Request HealthKit permissions
         if HKHealthStore.isHealthDataAvailable() {
@@ -5154,6 +5198,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         // Log what we're sending to help with debugging
         print("📱 Syncing with watch: state=\(runState.rawValue), isPrimaryForDistance=\(isPrimaryForDistance), isIndoor=\(isIndoorMode)")
         
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: "RUNNING", direction: "phoneToWatch", data: updateData)
+        
         session.sendMessage(updateData, replyHandler: { response in
             if let status = response["status"] as? String, status == "success" {
                 // Watch received the update
@@ -6146,6 +6193,10 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             "hasGoodLocationData": hasGoodLocationData,
             "useImperialUnits": !useMetric
         ]
+        
+        if let userPayload = CurrentUserService.shared.userSyncPayload() {
+            workoutData["user"] = userPayload
+        }
         
         // Add metrics based on authority and validity
         if !WorkoutCommunicationHandler.shared.isPrimaryForDistance {

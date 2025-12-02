@@ -1,0 +1,28 @@
+{
+  "category": "Food",
+  "requiredMetrics": [
+    "calories",
+    "protein",
+    "carbs",
+    "fat",
+    "mealType",
+    "timestamp"
+  ],
+  "expectedCoordination": [],
+  "syncFrequency": 0,
+  "appGroupSync": {
+    "enabled": true,
+    "appGroupIdentifier": "group.com.do.fitness",
+    "key": "todaysFoods",
+    "format": "FoodEntryData",
+    "expectedBehavior": "Sync immediately when food is logged, updated, or deleted"
+  },
+  "watchIntegration": {
+    "fuelCategory": {
+      "enabled": true,
+      "readsFrom": "AppGroup UserDefaults",
+      "updatesOn": "Food entry changes"
+    }
+  }
+}
+

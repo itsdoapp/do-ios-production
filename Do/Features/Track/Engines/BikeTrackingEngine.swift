@@ -187,6 +187,9 @@ class BikeTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             // Log state changes
             print("📱 Updated bikeState: \(oldValue) => \(bikeState)")
             
+            // Test logging
+            TrackingTestLogger.shared.logStateChange(category: "CYCLING", oldState: oldValue.rawValue, newState: bikeState.rawValue)
+            
             // Post notification for state change
             NotificationCenter.default.post(name: .bikeTrackingEngineDidUpdateState, object: nil)
         }
@@ -2318,6 +2321,12 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         // Update state
         bikeState = .active
         
+        // Request location permissions for workout tracking (needs "Always" for background)
+        if !isIndoorMode {
+            print("📍 Requesting location permissions for outdoor bike tracking")
+            ModernLocationManager.shared.requestWorkoutLocationAuthorization()
+        }
+        
         // Update formatted values
         updateFormattedValues()
         
@@ -2479,6 +2488,12 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             isPrimaryForHeartRate = false // Watch still better for HR
             isPrimaryForCalories = true   // Phone can calculate calories with distance
             isPrimaryForCadence = false   // Watch better for cadence
+            
+            // Test logging
+            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "distance", primaryDevice: "phone", reason: "GPS-based outdoor tracking")
+            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "pace", primaryDevice: "phone", reason: "Calculated from GPS distance")
+            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
+            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "cadence", primaryDevice: "watch", reason: "Watch better for cadence")
             
             print("📱 Outdoor run with good GPS: Phone primary for distance/pace")
             print("⌚️ Watch primary for heart rate and cadence")
@@ -3856,10 +3871,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     }
     
     private func requestPermissions() {
-        // Request location permissions
+        // Request location permissions for workout tracking (needs "Always" for background)
         // Use ModernLocationManager to avoid UI unresponsiveness warnings
-        ModernLocationManager.shared.requestWhenInUseAuthorization()
-        ModernLocationManager.shared.requestAlwaysAuthorization()
+        ModernLocationManager.shared.requestWorkoutLocationAuthorization()
         
         // Request HealthKit permissions
         if HKHealthStore.isHealthDataAvailable() {
@@ -4994,6 +5008,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         
         // Log what we're sending to help with debugging
         print("📱 Syncing with watch: state=\(bikeState.rawValue), isPrimaryForDistance=\(isPrimaryForDistance), isIndoor=\(isIndoorMode)")
+        
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: "CYCLING", direction: "phoneToWatch", data: updateData)
         
         session.sendMessage(updateData, replyHandler: { response in
             if let status = response["status"] as? String, status == "success" {

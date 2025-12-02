@@ -91,16 +91,51 @@ class WatchLocationManager: NSObject, ObservableObject {
     // MARK: - Authorization
     
     func requestAuthorization() {
-        guard authorizationStatus == .notDetermined else { return }
-        locationManager.requestWhenInUseAuthorization()
+        let currentStatus = locationManager.authorizationStatus
+        print("📍 [WatchLocationManager] Current authorization status: \(currentStatus.rawValue)")
+        
+        if currentStatus == .notDetermined {
+            print("📍 [WatchLocationManager] Requesting when-in-use authorization")
+            locationManager.requestWhenInUseAuthorization()
+        } else if currentStatus == .authorizedWhenInUse {
+            print("📍 [WatchLocationManager] Already authorized when-in-use")
+            // For watch workouts, when-in-use is sufficient
+        } else if currentStatus == .authorizedAlways {
+            print("📍 [WatchLocationManager] Already authorized always")
+        } else {
+            print("⚠️ [WatchLocationManager] Authorization denied or restricted: \(currentStatus.rawValue)")
+        }
     }
     
     // MARK: - Location Tracking
     
     func startTracking() {
-        guard authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways else {
-            print("⚠️ [WatchLocationManager] Cannot start tracking - authorization: \(authorizationStatus.rawValue)")
+        // Check current status (it may have changed)
+        let currentStatus = locationManager.authorizationStatus
+        
+        if currentStatus == .notDetermined {
+            print("📍 [WatchLocationManager] Authorization not determined - requesting")
             requestAuthorization()
+            // Wait for authorization callback
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.checkAndStartTracking()
+            }
+            return
+        }
+        
+        guard currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways else {
+            print("⚠️ [WatchLocationManager] Cannot start tracking - authorization: \(currentStatus.rawValue)")
+            print("⚠️ Please enable location permissions in Settings")
+            return
+        }
+        
+        checkAndStartTracking()
+    }
+    
+    private func checkAndStartTracking() {
+        let currentStatus = locationManager.authorizationStatus
+        guard currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways else {
+            print("⚠️ [WatchLocationManager] Still not authorized: \(currentStatus.rawValue)")
             return
         }
         
@@ -109,9 +144,15 @@ class WatchLocationManager: NSObject, ObservableObject {
             return
         }
         
-        print("📍 [WatchLocationManager] Starting location tracking")
+        print("📍 [WatchLocationManager] Starting location tracking with status: \(currentStatus.rawValue)")
         locationList.removeAll()
         isTracking = true
+        
+        // Ensure delegate is set
+        if locationManager.delegate !== self {
+            locationManager.delegate = self
+        }
+        
         locationManager.startUpdatingLocation()
     }
     
@@ -143,8 +184,16 @@ class WatchLocationManager: NSObject, ObservableObject {
 extension WatchLocationManager: CLLocationManagerDelegate {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
+            let oldStatus = self.authorizationStatus
             self.authorizationStatus = manager.authorizationStatus
-            print("📍 [WatchLocationManager] Authorization changed: \(manager.authorizationStatus.rawValue)")
+            print("📍 [WatchLocationManager] Authorization changed: \(oldStatus.rawValue) → \(manager.authorizationStatus.rawValue)")
+            
+            // If we're trying to track and just got authorization, start tracking
+            if (manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways) && !self.isTracking {
+                // Check if we should start (e.g., if there's an active workout)
+                // This will be handled by the workout views calling startTracking()
+                print("📍 [WatchLocationManager] Authorization granted - ready to track")
+            }
         }
     }
     

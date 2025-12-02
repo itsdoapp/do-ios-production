@@ -39,6 +39,10 @@ class WatchWorkoutCoordinator: ObservableObject {
             return
         }
         
+        // Test logging
+        let scenario = isIndoor ? "Indoor \(type.rawValue.capitalized)" : "Outdoor \(type.rawValue.capitalized)"
+        TrackingTestLogger.shared.logTestStart(category: type.rawValue.uppercased(), scenario: scenario)
+        
         let session = WatchWorkoutSession(
             workoutType: type,
             state: .starting,
@@ -48,6 +52,9 @@ class WatchWorkoutCoordinator: ObservableObject {
         DispatchQueue.main.async {
             self.activeWorkout = session
         }
+        
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: type.rawValue.uppercased(), oldState: "notStarted", newState: "starting")
         
         // Notify phone
         var message: [String: Any] = [
@@ -67,6 +74,9 @@ class WatchWorkoutCoordinator: ObservableObject {
             message["isOpenTraining"] = isOpenTraining
         }
         
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: type.rawValue.uppercased(), direction: "watchToPhone", data: message)
+        
         connectivityManager.sendMessage(message)
         
         // Special handling for gym workouts
@@ -83,22 +93,33 @@ class WatchWorkoutCoordinator: ObservableObject {
     func pauseWorkout() {
         guard var workout = activeWorkout, workout.state == .running else { return }
         
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: workout.workoutType.rawValue.uppercased(), oldState: "running", newState: "paused")
+        
         workout.state = .paused
         workout.lastUpdateDate = Date()
         DispatchQueue.main.async {
             self.activeWorkout = workout
         }
         
-        connectivityManager.sendMessage([
+        let message: [String: Any] = [
             "type": "workoutStateChange",
             "workoutType": workout.workoutType.rawValue,
             "state": WorkoutState.paused.rawValue,
             "workoutId": workout.id
-        ])
+        ]
+        
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: workout.workoutType.rawValue.uppercased(), direction: "watchToPhone", data: message)
+        
+        connectivityManager.sendMessage(message)
     }
     
     func resumeWorkout() {
         guard var workout = activeWorkout, workout.state == .paused else { return }
+        
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: workout.workoutType.rawValue.uppercased(), oldState: "paused", newState: "running")
         
         workout.state = .running
         workout.lastUpdateDate = Date()
@@ -106,16 +127,24 @@ class WatchWorkoutCoordinator: ObservableObject {
             self.activeWorkout = workout
         }
         
-        connectivityManager.sendMessage([
+        let message: [String: Any] = [
             "type": "workoutStateChange",
             "workoutType": workout.workoutType.rawValue,
             "state": WorkoutState.running.rawValue,
             "workoutId": workout.id
-        ])
+        ]
+        
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: workout.workoutType.rawValue.uppercased(), direction: "watchToPhone", data: message)
+        
+        connectivityManager.sendMessage(message)
     }
     
     func stopWorkout() {
         guard var workout = activeWorkout else { return }
+        
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: workout.workoutType.rawValue.uppercased(), oldState: workout.state.rawValue, newState: "stopping")
         
         workout.state = .stopping
         workout.lastUpdateDate = Date()
@@ -123,18 +152,26 @@ class WatchWorkoutCoordinator: ObservableObject {
             self.activeWorkout = workout
         }
         
-        connectivityManager.sendMessage([
+        let message: [String: Any] = [
             "type": "workoutStateChange",
             "workoutType": workout.workoutType.rawValue,
             "state": WorkoutState.stopping.rawValue,
             "workoutId": workout.id
-        ])
+        ]
+        
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: workout.workoutType.rawValue.uppercased(), direction: "watchToPhone", data: message)
+        
+        connectivityManager.sendMessage(message)
         
         // Complete the workout
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             workout.state = .completed
             workout.lastUpdateDate = Date()
             self.activeWorkout = nil
+            
+            // Test logging
+            TrackingTestLogger.shared.logTestEnd(category: workout.workoutType.rawValue.uppercased())
         }
     }
     
@@ -145,6 +182,18 @@ class WatchWorkoutCoordinator: ObservableObject {
         workout.lastUpdateDate = Date()
         DispatchQueue.main.async {
             self.activeWorkout = workout
+        }
+        
+        // Test logging - log metrics periodically (every 5 seconds to avoid spam)
+        let currentTime = Date().timeIntervalSince1970
+        let lastLogKey = "lastMetricLog_\(workout.id)"
+        let lastLogTime = UserDefaults.standard.double(forKey: lastLogKey)
+        
+        if currentTime - lastLogTime >= 5.0 {
+            TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "distance", value: metrics.distance)
+            TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "heartRate", value: metrics.heartRate)
+            TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "calories", value: metrics.calories)
+            UserDefaults.standard.set(currentTime, forKey: lastLogKey)
         }
         
         // Sync metrics to phone

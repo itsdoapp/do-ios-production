@@ -3334,9 +3334,12 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
                                            mode: .spokenAudio,
                                            options: [.mixWithOthers, .allowBluetooth, .defaultToSpeaker])
                 
-                // Set optimal audio quality settings
+                // Set optimal audio quality settings (matching old DOIOS implementation)
                 try audioSession.setPreferredSampleRate(48000.0)  // High quality sample rate
                 try audioSession.setPreferredIOBufferDuration(0.01) // Low latency for responsive speech
+                
+                // CRITICAL: Set stereo output for better audio quality (from old DOIOS)
+                try audioSession.setPreferredOutputNumberOfChannels(2)
             }
             
             // Activate with high priority if not already active
@@ -3344,7 +3347,7 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
                 try audioSession.setActive(true, options: [])
             }
             
-            print("🔊 Audio session optimized for realistic speech")
+            print("🔊 Audio session optimized for realistic speech (stereo, 48kHz)")
         } catch {
             print("❌ Failed to configure premium audio session: \(error.localizedDescription)")
             // Fallback to basic configuration
@@ -3356,8 +3359,12 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
         do {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
+            
+            // Still try to set stereo output even in fallback
+            try? audioSession.setPreferredOutputNumberOfChannels(2)
+            
             try audioSession.setActive(true)
-            print("🔊 Using fallback audio session configuration")
+            print("🔊 Using fallback audio session configuration (stereo)")
         } catch {
             print("❌ Failed to configure fallback audio session: \(error.localizedDescription)")
         }
@@ -3436,28 +3443,29 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
     public func configureNaturalSpeechParameters(for utterance: AVSpeechUtterance, messageType: AnnouncementMessageType) {
         switch messageType {
         case .announcement:
-            // Standard announcements - clear and natural
-            utterance.rate = 0.48          // Slightly slower for clarity during exercise
-            utterance.pitchMultiplier = 1.05 // Slightly higher for better audibility
-            utterance.volume = 1.0         // Full volume
+            // Standard announcements - optimized for clarity during running
+            // Slightly slower rate helps with comprehension while moving
+            utterance.rate = 0.50          // Optimal rate for running (from old DOIOS)
+            utterance.pitchMultiplier = 1.1  // Slightly higher for better audibility outdoors
+            utterance.volume = 1.0         // Full volume for outdoor environments
             
         case .coaching:
-            // Coaching tips - more conversational
+            // Coaching tips - conversational but clear
             utterance.rate = 0.52          // Slightly faster, more natural
             utterance.pitchMultiplier = 1.0  // Natural pitch
-            utterance.volume = 0.95        // Slightly softer
+            utterance.volume = 0.95        // Slightly softer for less intrusive coaching
             
         case .milestone:
-            // Milestone celebrations - enthusiastic
-            utterance.rate = 0.50          // Measured pace for impact
+            // Milestone celebrations - enthusiastic and clear
+            utterance.rate = 0.50          // Measured pace for impact (from old DOIOS)
             utterance.pitchMultiplier = 1.1  // Higher pitch for excitement
             utterance.volume = 1.0         // Full volume
             
         case .warning:
-            // Pace guidance/warnings - attention-getting
-            utterance.rate = 0.45          // Slower for attention
+            // Pace guidance/warnings - attention-getting and clear
+            utterance.rate = 0.45          // Slower for attention and clarity
             utterance.pitchMultiplier = 1.15 // Higher pitch for alert
-            utterance.volume = 1.0         // Full volume
+            utterance.volume = 1.0         // Full volume for important warnings
         }
     }
 
@@ -3572,23 +3580,27 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
     }
 
     public func performSpeechAnnouncement(utterance: AVSpeechUtterance, message: String) {
+        // Ensure the audio session is optimally configured before speaking
+        configureAudioSessionForRealisticSpeech()
+        
         // Ensure the speech synthesizer is properly configured
         if speechSynthesizer.delegate == nil {
             speechSynthesizer.delegate = self
         }
         
-        // Apply final quality settings
+        // Apply final quality settings - use application audio session for better control
         speechSynthesizer.usesApplicationAudioSession = true
         
-        // Add a tiny pre-speech delay for audio session settling
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+        // Add a small pre-speech delay for audio session settling (critical for quality)
+        // This ensures the stereo configuration is fully active before speech starts
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self = self else { return }
         
-        // Speak the message
+            // Speak the message
             self.speechSynthesizer.speak(utterance)
             print("🔊 Speaking with enhanced voice: \(utterance.voice?.identifier ?? "unknown")")
         
-        // Record the time of last announcement
+            // Record the time of last announcement
             self.lastAnnouncement = Date()
         }
     }
@@ -9820,10 +9832,27 @@ extension OutdoorRunViewController: WorkoutCommunicationHandlerDelegate {
             case "workoutUpdate":
                 // Handle workout update from watch
                 break
+            case "workoutMetrics", "liveMetrics":
+                // Handle metrics updates from watch (heart rate, etc.)
+                self.handleWorkoutMetricsMessage(message)
             default:
                 break
             }
         }
+    }
+    
+    private func handleWorkoutMetricsMessage(_ message: [String: Any]) {
+        // Extract metrics from the message
+        guard let metricsDict = message["metrics"] as? [String: Any] else {
+            print("📱 [OutdoorRunViewController] No metrics dict in workoutMetrics message")
+            return
+        }
+        
+        print("📱 [OutdoorRunViewController] Received workoutMetrics from watch: \(metricsDict)")
+        
+        // Use the existing handleWatchMetrics method which processes metrics through metricsCoordinator
+        // This ensures consistent processing and coordination logic
+        handleWatchMetrics(metricsDict)
     }
     
     private func handleWatchStateChange(_ stateRaw: String) {

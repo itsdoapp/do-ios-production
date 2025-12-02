@@ -87,8 +87,12 @@ class HealthKitWorkoutManager: NSObject, ObservableObject {
                     guard let self = self else { return }
                     if let error = error {
                         print("❌ [HealthKitWorkoutManager] Error starting workout: \(error.localizedDescription)")
+                        TrackingTestLogger.shared.logError(category: type.rawValue.uppercased(), message: "Error starting workout", error: error)
                     } else {
                         print("✅ [HealthKitWorkoutManager] Workout started successfully")
+                        
+                        // Test logging
+                        TrackingTestLogger.shared.logInfo(category: type.rawValue.uppercased(), message: "HealthKit workout started successfully")
                         
                         // Start metrics update timer (watchOS 9.0+)
                         self.startMetricsUpdates()
@@ -111,6 +115,11 @@ class HealthKitWorkoutManager: NSObject, ObservableObject {
     func endWorkout() {
         guard let session = currentSession, let builder = currentBuilder else { return }
         
+        // Test logging - determine workout type from active workout
+        if let workout = WatchWorkoutCoordinator.shared.activeWorkout {
+            TrackingTestLogger.shared.logInfo(category: workout.workoutType.rawValue.uppercased(), message: "Ending HealthKit workout")
+        }
+        
         // Stop metrics updates immediately
         stopMetricsUpdates()
         Task { @MainActor in
@@ -129,14 +138,23 @@ class HealthKitWorkoutManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 if let error = error {
                     print("❌ [HealthKitWorkoutManager] Error ending collection: \(error.localizedDescription)")
+                    if let workout = WatchWorkoutCoordinator.shared.activeWorkout {
+                        TrackingTestLogger.shared.logError(category: workout.workoutType.rawValue.uppercased(), message: "Error ending collection", error: error)
+                    }
                 }
                 
                 builderToFinish.finishWorkout { workout, error in
                     DispatchQueue.main.async {
                         if let error = error {
                             print("❌ [HealthKitWorkoutManager] Error finishing workout: \(error.localizedDescription)")
+                            if let activeWorkout = WatchWorkoutCoordinator.shared.activeWorkout {
+                                TrackingTestLogger.shared.logError(category: activeWorkout.workoutType.rawValue.uppercased(), message: "Error finishing workout", error: error)
+                            }
                         } else {
                             print("✅ [HealthKitWorkoutManager] Workout finished and saved to HealthKit")
+                            if let activeWorkout = WatchWorkoutCoordinator.shared.activeWorkout {
+                                TrackingTestLogger.shared.logInfo(category: activeWorkout.workoutType.rawValue.uppercased(), message: "Workout finished and saved to HealthKit")
+                            }
                         }
                     }
                 }
@@ -185,6 +203,23 @@ class HealthKitWorkoutManager: NSObject, ObservableObject {
                 // Update current metrics from HealthKit
                 if let metrics = self.getCurrentMetrics() {
                     self.currentMetrics = metrics
+                    
+                    // Test logging - log metrics periodically (every 5 seconds to avoid spam)
+                    let currentTime = Date().timeIntervalSince1970
+                    let lastLogKey = "lastHealthKitMetricLog"
+                    let lastLogTime = UserDefaults.standard.double(forKey: lastLogKey)
+                    
+                    if currentTime - lastLogTime >= 5.0 {
+                        if let workout = WatchWorkoutCoordinator.shared.activeWorkout {
+                            TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "distance", value: metrics.distance, source: "HealthKit")
+                            TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "heartRate", value: metrics.heartRate, source: "HealthKit")
+                            TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "calories", value: metrics.calories, source: "HealthKit")
+                            if let cadence = metrics.cadence {
+                                TrackingTestLogger.shared.logMetricUpdate(device: "WATCH", category: workout.workoutType.rawValue.uppercased(), metric: "cadence", value: cadence, source: "HealthKit")
+                            }
+                        }
+                        UserDefaults.standard.set(currentTime, forKey: lastLogKey)
+                    }
                 }
             }
         }

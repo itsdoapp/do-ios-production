@@ -62,6 +62,9 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             return
         }
         
+        // Test logging
+        TrackingTestLogger.shared.logTestStart(category: "GYM", scenario: "Phone Only")
+        
         self.currentSession = session
         self.workoutStartTime = Date()
         self.isTracking = true
@@ -76,6 +79,10 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             self?.updateElapsedTime()
         }
         
+        // Test logging - coordination
+        TrackingTestLogger.shared.logCoordination(category: "GYM", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
+        TrackingTestLogger.shared.logCoordination(category: "GYM", metric: "calories", primaryDevice: "watch", reason: "Watch better for calorie estimation")
+        
         // Sync to watch
         syncWorkoutStateToWatch()
         
@@ -84,6 +91,9 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
         
         // Start smart handoff monitoring
         SmartHandoffCoordinator.shared.startMonitoring(workoutType: .gym)
+        
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: "GYM", oldState: "notStarted", newState: "tracking")
         
         print("🏋️ [GymTrackingEngine] Started workout: \(session.name ?? "Unknown")")
     }
@@ -104,6 +114,10 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
         
         // Stop smart handoff monitoring
         SmartHandoffCoordinator.shared.stopMonitoring()
+        
+        // Test logging
+        TrackingTestLogger.shared.logStateChange(category: "GYM", oldState: "tracking", newState: "stopped")
+        TrackingTestLogger.shared.logTestEnd(category: "GYM")
         
         print("🏋️ [GymTrackingEngine] Stopped workout")
     }
@@ -139,6 +153,10 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             totalVolume += weight * Double(reps)
             totalReps += reps
         }
+        
+        // Test logging
+        TrackingTestLogger.shared.logMetricUpdate(device: "PHONE", category: "GYM", metric: "totalVolume", value: totalVolume)
+        TrackingTestLogger.shared.logMetricUpdate(device: "PHONE", category: "GYM", metric: "totalReps", value: totalReps)
         
         // Sync to watch
         syncSetCompletionToWatch(movement: movement, set: completedSet)

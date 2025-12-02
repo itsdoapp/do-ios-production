@@ -5378,6 +5378,8 @@ struct RainOverlay: View {
     }
 }
 
+// Note: RainSplashLayer and RainSplash are defined in WeatherViews.swift
+
 // Layer of vertical rain streaks
 struct RainStreakLayer: View {
     let count: Int
@@ -5449,33 +5451,7 @@ struct RainStreak: View {
     }
 }
 
-// Subtle water impact effects
-struct RainSplashLayer: View {
-    let count: Int
-    let bounds: CGSize
-    
-    var body: some View {
-        ForEach(0..<count, id: \.self) { _ in
-            RainSplash(nightMode: false)
-                .position(
-                    x: CGFloat.random(in: 0...bounds.width),
-                    y: CGFloat.random(in: 0...bounds.height)
-                )
-        }
-    }
-}
-
-// Individual rain splash effect
-struct RainSplash: View {
-    let nightMode: Bool
-    
-    var body: some View {
-        Circle()
-            .fill(nightMode ? Color.white.opacity(0.2) : Color.white.opacity(0.3))
-            .frame(width: 4, height: 4)
-            .blur(radius: 2)
-    }
-}
+// Note: RainSplashLayer and RainSplash are defined in WeatherViews.swift
 
 // Enhanced snow overlay with realistic 3D snowflakes
 struct SnowOverlay: View {
@@ -5998,42 +5974,7 @@ struct LightningBolt: Shape {
     }
 }
 
-// Cloud layer for animated storm clouds
-struct CloudLayer: View {
-    let count: Int
-    let sizeRange: ClosedRange<CGFloat>
-    let opacityRange: ClosedRange<Double>
-    let speedRange: ClosedRange<Double>
-    let bounds: CGSize
-    let zIndex: Int
-    
-    @State private var cloudPositions: [(x: CGFloat, y: CGFloat, size: CGFloat, opacity: Double, speed: Double)] = []
-    
-    var body: some View {
-        ZStack {
-            ForEach(0..<count, id: \.self) { index in
-                if index < cloudPositions.count {
-                    let pos = cloudPositions[index]
-                    Cloud(opacity: pos.opacity, speed: pos.speed)
-                        .frame(width: pos.size, height: pos.size * 0.6)
-                        .position(x: pos.x, y: pos.y)
-                }
-            }
-        }
-        .onAppear {
-            // Initialize cloud positions randomly across the view
-            cloudPositions = (0..<count).map { _ in
-                (
-                    x: CGFloat.random(in: 0...bounds.width),
-                    y: CGFloat.random(in: 0...bounds.height * 0.6), // Keep clouds in upper portion
-                    size: CGFloat.random(in: sizeRange),
-                    opacity: Double.random(in: opacityRange),
-                    speed: Double.random(in: speedRange)
-                )
-            }
-        }
-    }
-}
+// Note: CloudLayer is now defined in WeatherViews.swift
 
 // Animated storm clouds component
 struct StormClouds: View {
@@ -7437,28 +7378,7 @@ private struct StarryBackgroundView: View {
 
 
 
-struct ShimmerWave: Shape {
-    var waveWidth: CGFloat
-    var waveHeight: CGFloat
-    
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: 0, y: rect.midY))
-            
-            // Create a wavy path
-            for i in stride(from: 0, to: waveWidth, by: 20) {
-                let y = sin(Double(i) / 20) * Double(waveHeight) + Double(rect.midY)
-                path.addLine(to: CGPoint(x: i, y: y))
-            }
-            
-            // Close the path
-            path.addLine(to: CGPoint(x: waveWidth, y: rect.midY))
-            path.addLine(to: CGPoint(x: waveWidth, y: rect.maxY))
-            path.addLine(to: CGPoint(x: 0, y: rect.maxY))
-            path.closeSubpath()
-        }
-    }
-}
+// Note: ShimmerWave is now defined in WeatherViews.swift
 
 // Add this extension to make the hour check more readable
 extension Int {

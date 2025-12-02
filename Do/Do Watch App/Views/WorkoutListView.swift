@@ -113,24 +113,45 @@ struct WorkoutListView: View {
                                 .padding(.horizontal, 8)
                             
                             // 3. Join Phone Workout (if available)
-                            if let phoneWorkout = phoneWorkout,
-                               let workoutActive = phoneWorkout["workoutActive"] as? Bool,
-                               workoutActive,
-                               let workoutType = phoneWorkout["workoutType"] as? String {
-                                Button(action: {
-                                    joinPhoneWorkout(phoneWorkout)
-                                }) {
-                                    WorkoutRowCard(
-                                        type: workoutTypeFromString(workoutType),
-                                        name: "Join on iPhone",
-                                        icon: "iphone",
-                                        color: .green,
-                                        isHighlighted: true,
-                                        isHero: true
-                                    )
+                            Group {
+                                if let phoneWorkout = phoneWorkout,
+                                   let workoutActive = phoneWorkout["workoutActive"] as? Bool,
+                                   workoutActive,
+                                   let workoutTypeString = phoneWorkout["workoutType"] as? String {
+                                    
+                                    let workoutType = workoutTypeFromString(workoutTypeString)
+                                    let workoutTypeName = getWorkoutName(for: workoutType)
+                                    
+                                    let userInfo = phoneWorkout["user"] as? [String: Any]
+                                    let userDisplayName = (userInfo?["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let userHandle = (userInfo?["userName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    
+                                    // Build informative join title with workout type
+                                    let joinTitle: String = {
+                                        if let displayName = userDisplayName, !displayName.isEmpty {
+                                            return "Active \(workoutTypeName) - Join \(displayName)"
+                                        } else if let handle = userHandle, !handle.isEmpty {
+                                            return "Active \(workoutTypeName) - Join \(handle)"
+                                        } else {
+                                            return "Active \(workoutTypeName) - Join on iPhone"
+                                        }
+                                    }()
+                                    
+                                    Button(action: {
+                                        joinPhoneWorkout(phoneWorkout)
+                                    }) {
+                                        WorkoutRowCard(
+                                            type: workoutType,
+                                            name: joinTitle,
+                                            icon: "iphone",
+                                            color: .green,
+                                            isHighlighted: true,
+                                            isHero: true
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 8)
                                 }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 8)
                             }
                             
                             // 4. Suggested Workout (Smart Recommendation)
@@ -205,6 +226,34 @@ struct WorkoutListView: View {
                 Task {
                     await dailyBricksService.loadTodayProgress()
                 }
+                
+                // Listen for phone workout updates from application context
+                NotificationCenter.default.addObserver(
+                    forName: NSNotification.Name("PhoneWorkoutUpdate"),
+                    object: nil,
+                    queue: .main
+                ) { [self] notification in
+                    if let userInfo = notification.userInfo {
+                        // Convert [AnyHashable: Any] to [String: Any]
+                        var workoutData: [String: Any] = [:]
+                        for (key, value) in userInfo {
+                            if let stringKey = key as? String {
+                                workoutData[stringKey] = value
+                            }
+                        }
+                        
+                        if let workoutActive = workoutData["workoutActive"] as? Bool, workoutActive {
+                            self.phoneWorkout = workoutData
+                            print("⌚️ [WorkoutListView] Updated phoneWorkout from application context: \(workoutData)")
+                        } else {
+                            self.phoneWorkout = nil
+                            print("⌚️ [WorkoutListView] Cleared phoneWorkout (workout not active)")
+                        }
+                    }
+                }
+            }
+            .onDisappear {
+                NotificationCenter.default.removeObserver(self, name: NSNotification.Name("PhoneWorkoutUpdate"), object: nil)
             }
         }
     }

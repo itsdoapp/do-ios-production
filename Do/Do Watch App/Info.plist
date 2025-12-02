@@ -32,5 +32,11 @@
     <string>We need access to your health data to track your workouts</string>
     <key>NSHealthUpdateUsageDescription</key>
     <string>We need to update your health data with workout information</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>We need your location to track your workouts, calculate distance, pace, and show your route</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>We need your location to track your workouts in the background, calculate distance, pace, and show your route</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>We need your location to track your workouts in the background, calculate distance, pace, and show your route</string>
 </dict>
 </plist>

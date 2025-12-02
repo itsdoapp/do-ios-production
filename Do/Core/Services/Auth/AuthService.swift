@@ -5,6 +5,7 @@
 
 import Foundation
 import Combine
+import UIKit
 
 enum AuthError: Error {
     case invalidCredentials
@@ -329,24 +330,7 @@ class AuthService: ObservableObject {
         do {
             // Lambda will handle cognitoSub lookup automatically
             let user = try await UserService.shared.getUser(userId: userId)
-            await MainActor.run {
-                self.currentUser = user
-                
-                // Save to UserDefaults for quick access on next launch
-                UserDefaults.standard.set(user.username, forKey: "username")
-                UserDefaults.standard.set(user.email, forKey: "email")
-                UserDefaults.standard.set(user.name, forKey: "name")
-                
-                // Sync to CurrentUserService for legacy code
-                var legacyUser = UserModel()
-                legacyUser.userID = user.id
-                legacyUser.userName = user.username
-                legacyUser.email = user.email
-                legacyUser.name = user.name
-                legacyUser.profilePictureUrl = user.profilePictureUrl
-                CurrentUserService.shared.updateUser(legacyUser)
-                print("✅ [AuthService] Synced user to CurrentUserService: \(user.username)")
-            }
+            await syncCurrentUserState(with: user)
             print("✅ [AuthService] User profile loaded")
         } catch {
             // If user doesn't exist (404), create it
@@ -377,24 +361,7 @@ class AuthService: ObservableObject {
                 name: name
             )
             
-            await MainActor.run {
-                self.currentUser = user
-                
-                // Save to UserDefaults for quick access on next launch
-                UserDefaults.standard.set(user.username, forKey: "username")
-                UserDefaults.standard.set(user.email, forKey: "email")
-                UserDefaults.standard.set(user.name, forKey: "name")
-                
-                // Sync to CurrentUserService for legacy code
-                var legacyUser = UserModel()
-                legacyUser.userID = user.id
-                legacyUser.userName = user.username
-                legacyUser.email = user.email
-                legacyUser.name = user.name
-                legacyUser.profilePictureUrl = user.profilePictureUrl
-                CurrentUserService.shared.updateUser(legacyUser)
-                print("✅ [AuthService] Synced new user to CurrentUserService: \(user.username)")
-            }
+            await syncCurrentUserState(with: user)
             print("✅ [AuthService] User profile created successfully")
         } catch {
             print("❌ [AuthService] Failed to create user profile: \(error)")
@@ -425,19 +392,7 @@ class AuthService: ObservableObject {
     private func fetchCurrentUser(userId: String) async {
         do {
             let user = try await UserService.shared.getUser(userId: userId)
-            await MainActor.run {
-                self.currentUser = user
-                
-                // Sync to CurrentUserService for legacy code
-                var legacyUser = UserModel()
-                legacyUser.userID = user.id
-                legacyUser.userName = user.username
-                legacyUser.email = user.email
-                legacyUser.name = user.name
-                legacyUser.profilePictureUrl = user.profilePictureUrl
-                CurrentUserService.shared.updateUser(legacyUser)
-                print("✅ [AuthService] Synced user to CurrentUserService")
-            }
+            await syncCurrentUserState(with: user)
         } catch {
             await MainActor.run {
                 self.isAuthenticated = false
@@ -445,6 +400,48 @@ class AuthService: ObservableObject {
                 CurrentUserService.shared.clearUser()
             }
         }
+    }
+    
+    private func syncCurrentUserState(with user: User, persistToDefaults: Bool = true) async {
+        let legacyUser = await buildLegacyUser(from: user)
+        self.currentUser = user
+        
+        if persistToDefaults {
+            UserDefaults.standard.set(user.username, forKey: "username")
+            UserDefaults.standard.set(user.email, forKey: "email")
+            UserDefaults.standard.set(user.name, forKey: "name")
+        }
+        
+        CurrentUserService.shared.updateUser(legacyUser)
+        print("✅ [AuthService] Synced user to CurrentUserService: \(user.username)")
+    }
+    
+    private func buildLegacyUser(from user: User) async -> UserModel {
+        await Task.detached(priority: .utility) { () -> UserModel in
+            var legacyUser = UserModel()
+            legacyUser.userID = user.id
+            legacyUser.userName = user.username
+            legacyUser.email = user.email
+            legacyUser.name = user.name
+            legacyUser.profilePictureUrl = user.profilePictureUrl
+            legacyUser.privacyToggle = user.privacyToggle
+            legacyUser.followerCount = user.followerCount
+            legacyUser.followingCount = user.followingCount
+            
+            if let profilePicUrl = user.profilePictureUrl,
+               let url = URL(string: profilePicUrl) {
+                do {
+                    let (data, _) = try await URLSession.shared.data(from: url)
+                    if let image = UIImage(data: data) {
+                        legacyUser.profilePicture = image
+                    }
+                } catch {
+                    print("❌ [AuthService] Failed to load profile picture: \(error.localizedDescription)")
+                }
+            }
+            
+            return legacyUser
+        }.value
     }
     
     private func decodeUserId(from idToken: String) throws -> String {

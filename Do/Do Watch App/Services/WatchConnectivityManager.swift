@@ -168,6 +168,9 @@ class WatchConnectivityManager: NSObject, ObservableObject {
                 workoutData["elapsedTime"] = response["elapsedTime"]
                 workoutData["metrics"] = response["metrics"] as? [String: Any]
                 workoutData["isWatchTracking"] = response["isWatchTracking"] as? Bool ?? false
+                if let user = response["user"] as? [String: Any] {
+                    workoutData["user"] = user
+                }
                 completion(workoutData)
             } else {
                 completion(nil)
@@ -187,6 +190,9 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             "metrics": metrics,
             "timestamp": Date().timeIntervalSince1970
         ]
+        
+        // Test logging
+        TrackingTestLogger.shared.logSyncEvent(category: workoutType.uppercased(), direction: "watchToPhone", data: message)
         
         sendMessage(message)
     }
@@ -226,6 +232,12 @@ extension WatchConnectivityManager: WCSessionDelegate {
         DispatchQueue.main.async {
             print("📨 [WatchConnectivityManager] Received message: \(message.keys.joined(separator: ", "))")
             self.receivedMessages = message
+            
+            // Test logging
+            if let type = message["type"] as? String {
+                let workoutType = message["workoutType"] as? String ?? type
+                TrackingTestLogger.shared.logSyncEvent(category: workoutType.uppercased(), direction: "phoneToWatch", data: message)
+            }
             
             // Handle different message types
             if let type = message["type"] as? String {
@@ -309,12 +321,21 @@ extension WatchConnectivityManager: WCSessionDelegate {
         DispatchQueue.main.async {
             print("📦 [WatchConnectivityManager] Received application context: \(applicationContext.keys.joined(separator: ", "))")
             
+            // Test logging
+            if let type = applicationContext["type"] as? String {
+                let workoutType = applicationContext["workoutType"] as? String ?? type
+                TrackingTestLogger.shared.logSyncEvent(category: workoutType.uppercased(), direction: "phoneToWatch", data: applicationContext)
+            }
+            
             if let type = applicationContext["type"] as? String {
                 switch type {
                 case "workoutHandoff":
                     self.handleWorkoutHandoff(applicationContext)
                 case "workoutMetrics":
                     self.handleWorkoutMetrics(applicationContext)
+                case "workoutUpdate":
+                    // Handle workout updates from phone - notify WorkoutListView
+                    self.handleWorkoutUpdate(applicationContext)
                 case "authTokens":
                     // Forward to WatchAuthService (it will handle token storage and notification)
                     WatchAuthService.shared.handleApplicationContext(applicationContext)
@@ -345,6 +366,27 @@ extension WatchConnectivityManager: WCSessionDelegate {
                 object: nil,
                 userInfo: metrics
             )
+        }
+    }
+    
+    private func handleWorkoutUpdate(_ message: [String: Any]) {
+        // Check if this is an active workout update
+        if let workoutActive = message["workoutActive"] as? Bool, workoutActive {
+            // Post notification for WorkoutListView to update phoneWorkout state
+            NotificationCenter.default.post(
+                name: NSNotification.Name("PhoneWorkoutUpdate"),
+                object: nil,
+                userInfo: message
+            )
+            print("📱 [WatchConnectivityManager] Posted PhoneWorkoutUpdate notification with workoutActive: true")
+        } else {
+            // Workout is not active, clear it
+            NotificationCenter.default.post(
+                name: NSNotification.Name("PhoneWorkoutUpdate"),
+                object: nil,
+                userInfo: ["workoutActive": false]
+            )
+            print("📱 [WatchConnectivityManager] Posted PhoneWorkoutUpdate notification with workoutActive: false")
         }
     }
     
