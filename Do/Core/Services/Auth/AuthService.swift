@@ -301,7 +301,13 @@ class AuthService: ObservableObject {
     
     // MARK: - Private Helpers
     
-    private func fetchOrCreateUserProfile(userId: String) async {
+    private func fetchOrCreateUserProfile(userId: String, retryCount: Int = 0) async {
+        // Prevent infinite recursion - limit retries to 1 attempt
+        guard retryCount <= 1 else {
+            print("❌ [AuthService] Maximum retry limit reached for fetchOrCreateUserProfile. Aborting to prevent infinite loop.")
+            return
+        }
+        
         do {
             // Lambda will handle cognitoSub lookup automatically
             let user = try await UserService.shared.getUser(userId: userId)
@@ -327,8 +333,9 @@ class AuthService: ObservableObject {
         } catch let error as APIError {
             // Check if it's a 404 (user not found) before trying to create
             if case .serverError(let statusCode) = error, statusCode == 404 {
-                print("⚠️ [AuthService] User profile not found (404), creating...")
-                await createUserProfile(userId: userId)
+                print("⚠️ [AuthService] User profile not found (404), creating... (retryCount: \(retryCount))")
+                // Increment retryCount to track the attempt
+                await createUserProfile(userId: userId, retryCount: retryCount)
             } else {
                 print("⚠️ [AuthService] Error fetching user profile: \(error) - not a 404, skipping creation")
                 // Don't try to create if it's not a 404 - user might already exist
@@ -339,7 +346,13 @@ class AuthService: ObservableObject {
         }
     }
     
-    private func createUserProfile(userId: String) async {
+    private func createUserProfile(userId: String, retryCount: Int = 0) async {
+        // Prevent infinite recursion - limit retries to 1 attempt
+        guard retryCount <= 1 else {
+            print("❌ [AuthService] Maximum retry limit reached for createUserProfile. Aborting to prevent infinite loop.")
+            return
+        }
+        
         do {
             // Get email and username from ID token (already decoded)
             guard let idToken = keychainManager.get(Constants.Keychain.idToken) else {
@@ -353,7 +366,7 @@ class AuthService: ObservableObject {
             let username = claims["cognito:username"] as? String ?? claims["preferred_username"] as? String ?? email.components(separatedBy: "@").first ?? "user"
             let name = claims["name"] as? String
             
-            print("📝 [AuthService] Creating user profile for: \(username) (\(email))")
+            print("📝 [AuthService] Creating user profile for: \(username) (\(email)) (retryCount: \(retryCount))")
             let user = try await UserService.shared.createUser(
                 userId: userId,
                 username: username,
@@ -384,10 +397,15 @@ class AuthService: ObservableObject {
             // Handle specific error cases
             if case .serverError(let statusCode) = error {
                 if statusCode == 403 {
-                    print("⚠️ [AuthService] User creation failed with 403 - user may already exist or token invalid")
-                    print("⚠️ [AuthService] Attempting to fetch user profile again...")
-                    // Try fetching again - user might have been created by another process
-                    await fetchOrCreateUserProfile(userId: userId)
+                    print("⚠️ [AuthService] User creation failed with 403 - user may already exist or token invalid (retryCount: \(retryCount))")
+                    // Only retry once - if we get 403 again, the user likely doesn't have permission or already exists
+                    if retryCount < 1 {
+                        print("⚠️ [AuthService] Attempting to fetch user profile again (retry \(retryCount + 1)/1)...")
+                        // Try fetching again - user might have been created by another process
+                        await fetchOrCreateUserProfile(userId: userId, retryCount: retryCount + 1)
+                    } else {
+                        print("❌ [AuthService] User creation failed with 403 after retry. User may not have permission or already exists. Aborting.")
+                    }
                 } else {
                     print("❌ [AuthService] Failed to create user profile: serverError(\(statusCode))")
                 }
@@ -465,3 +483,4 @@ class AuthService: ObservableObject {
         return sub
     }
 }
+

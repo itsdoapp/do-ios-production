@@ -519,6 +519,9 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         if authStatus == .authorizedWhenInUse {
             print("📍 [SMART] Requesting 'Always' authorization for background tracking...")
             manager.requestAlwaysAuthorization()
+            // Authorization request is asynchronous - will continue in locationManagerDidChangeAuthorization callback
+            // The callback will enable background location updates when authorization changes to .authorizedAlways
+            return
         }
         
         // Safely enable background location updates (only if authorized)

@@ -11,6 +11,7 @@ import Foundation
 import CoreLocation
 import Combine
 
+@MainActor
 class WatchLocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = WatchLocationManager()
     
@@ -90,10 +91,12 @@ class WatchLocationManager: NSObject, ObservableObject, CLLocationManagerDelegat
     
     // MARK: - CLLocationManagerDelegate
     
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    // Delegate methods are called by CoreLocation on background threads, so they must be nonisolated
+    // but we use MainActor.run to update properties safely
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.currentLocation = location
             
             // Only add locations with good accuracy
@@ -104,12 +107,12 @@ class WatchLocationManager: NSObject, ObservableObject, CLLocationManagerDelegat
         }
     }
     
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         print("❌ Location error: \(error.localizedDescription)")
     }
     
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        DispatchQueue.main.async {
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
             let oldStatus = self.authorizationStatus
             self.authorizationStatus = manager.authorizationStatus
             print("📍 Location authorization changed: \(oldStatus.rawValue) → \(manager.authorizationStatus.rawValue)")
