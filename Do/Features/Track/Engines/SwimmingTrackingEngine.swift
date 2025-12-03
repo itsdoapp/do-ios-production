@@ -27,12 +27,7 @@ class SwimmingTrackingEngine: NSObject, ObservableObject {
     @Published var pacePer100mSec: Double = 0
     
     enum SwimState: String { case notStarted, active, paused, ended }
-    @Published var state: SwimState = .notStarted {
-        didSet {
-            // Test logging
-            TrackingTestLogger.shared.logStateChange(category: "SWIMMING", oldState: oldValue.rawValue, newState: state.rawValue)
-        }
-    }
+    @Published var state: SwimState = .notStarted
     
     // Device coordination properties
     @Published var isWatchTracking: Bool = false
@@ -76,9 +71,6 @@ class SwimmingTrackingEngine: NSObject, ObservableObject {
     }
     
     func startTracking() {
-        // Test logging
-        TrackingTestLogger.shared.logTestStart(category: "SWIMMING", scenario: "Phone Only")
-        
         isTracking = true
         state = .active
         // Phone is the dashboard; tracking occurs on watch. Ensure WCSession is active.
@@ -101,9 +93,6 @@ class SwimmingTrackingEngine: NSObject, ObservableObject {
         
         // Stop smart handoff monitoring
         SmartHandoffCoordinator.shared.stopMonitoring()
-        
-        // Test logging
-        TrackingTestLogger.shared.logTestEnd(category: "SWIMMING")
     }
     
     func endSwimming() {
@@ -314,10 +303,8 @@ extension SwimmingTrackingEngine {
                 "type": "handoffResponse",
                 "accepted": true,
                 "workoutId": workoutId.uuidString
-            ], replyHandler: { response in
-                print("📱 Watch acknowledged handoff response: \(response)")
-            }, errorHandler: { error in
-                print("📱 Error sending handoff response: \(error.localizedDescription)")
+            ], replyHandler: { _ in }, errorHandler: { error in
+                print("❌ [SwimmingTrackingEngine] Error sending handoff response: \(error.localizedDescription)")
             })
         }
     }

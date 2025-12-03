@@ -2,405 +2,182 @@
 //  DailyBricksService.swift
 //  Do Watch App
 //
-//  Service to calculate daily bricks progress from HealthKit and app data
+//  Daily bricks service for watchOS - tracks 6 daily "bricks" (Move, Heart, Strength, Recovery, Mind, Fuel)
 //  Copyright © 2025 Mikiyas Tadesse. All rights reserved.
 //
 
+#if os(watchOS)
 import Foundation
-import HealthKit
 import Combine
+import HealthKit
 import WidgetKit
-
-// MARK: - Supporting Data Models
-
-struct FoodEntryData: Codable {
-    let id: String
-    let userId: String
-    let name: String
-    let mealType: String?
-    let calories: Double?
-    let protein: Double?
-    let carbs: Double?
-    let fat: Double?
-    let servingSize: String?
-    let notes: String?
-    let timestamp: String? // ISO8601 string
-    let source: String
-}
-
-struct MeditationSessionData: Codable {
-    let id: String
-    let userId: String
-    let type: String
-    let plannedDuration: TimeInterval
-    var actualDuration: TimeInterval
-    let guided: Bool
-    var notes: String?
-    let startTime: String? // ISO8601 string
-    var endTime: String? // ISO8601 string
-    var completed: Bool
-    var rating: Int?
-    let source: String
-    var aiGenerated: Bool
-    var scriptId: String?
-}
-
-// MARK: - DailyBricksService
 
 class DailyBricksService: ObservableObject {
     static let shared = DailyBricksService()
     
-    @Published var todaySummary: DailyBricksSummary?
-    @Published var isLoading: Bool = false
+    @Published var todayProgress: Double = 0.0
+    @Published var bricks: [DailyBrickProgress] = []
+    @Published var isLoading = false
     
     private let healthStore = HKHealthStore()
-    private var cancellables = Set<AnyCancellable>()
     private let appGroupIdentifier = "group.com.do.fitness"
-    private var sharedUserDefaults: UserDefaults?
+    private var userDefaults: UserDefaults?
+    private var cancellables = Set<AnyCancellable>()
     
     private init() {
-        sharedUserDefaults = UserDefaults(suiteName: appGroupIdentifier)
-        // Load initial data
-        Task {
-            await loadTodayProgress()
-        }
+        userDefaults = UserDefaults(suiteName: appGroupIdentifier)
+        loadTodayProgress()
         
-        // Set up periodic updates (every 5 minutes)
-        Timer.publish(every: 300, on: .main, in: .common)
+        // Reload progress every hour
+        Timer.publish(every: 3600, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                Task {
-                    await self?.loadTodayProgress()
-                }
+                self?.loadTodayProgress()
             }
             .store(in: &cancellables)
     }
     
     // MARK: - Public Methods
     
-    func loadTodayProgress() async {
-        await MainActor.run {
-            isLoading = true
-        }
+    func loadTodayProgress() {
+        isLoading = true
         
-        let calendar = Calendar.current
-        let now = Date()
-        let startOfDay = calendar.startOfDay(for: now)
-        
-        // Calculate progress for each brick
-        var bricks: [DailyBrickProgress] = []
-        
-        // 1. Move (Intentional Movement)
-        let moveProgress = await calculateMoveProgress(startOfDay: startOfDay, now: now)
-        bricks.append(moveProgress)
-        
-        // 2. Heart (Cardio Challenge)
-        let heartProgress = await calculateHeartProgress(startOfDay: startOfDay, now: now)
-        bricks.append(heartProgress)
-        
-        // 3. Strength (Muscle Challenge)
-        let strengthProgress = await calculateStrengthProgress(startOfDay: startOfDay, now: now)
-        bricks.append(strengthProgress)
-        
-        // 4. Recovery (Balance/Rest)
-        let recoveryProgress = await calculateRecoveryProgress(startOfDay: startOfDay, now: now)
-        bricks.append(recoveryProgress)
-        
-        // 5. Mind (Mental Wellness)
-        let mindProgress = await calculateMindProgress(startOfDay: startOfDay, now: now)
-        bricks.append(mindProgress)
-        
-        // 6. Fuel (Good Nutrition)
-        let fuelProgress = await calculateFuelProgress(startOfDay: startOfDay, now: now)
-        bricks.append(fuelProgress)
-        
-        let summary = DailyBricksSummary(bricks: bricks, date: now)
-        
-        await MainActor.run {
-            self.todaySummary = summary
-            self.isLoading = false
+        Task {
+            let calendar = Calendar.current
+            let now = Date()
+            let startOfDay = calendar.startOfDay(for: now)
             
-            // Share data with widget via App Group
-            self.shareDataWithWidget(summary: summary)
+            // Load all brick data
+            async let moveData = loadMoveData(startOfDay: startOfDay)
+            async let heartData = loadHeartData(startOfDay: startOfDay)
+            async let strengthData = loadStrengthData(startOfDay: startOfDay)
+            async let recoveryData = loadRecoveryData(startOfDay: startOfDay)
+            async let mindData = loadMindData(startOfDay: startOfDay)
+            async let fuelData = loadFuelData(startOfDay: startOfDay)
+            
+            let (move, heart, strength, recovery, mind, fuel) = await (
+                moveData, heartData, strengthData, recoveryData, mindData, fuelData
+            )
+            
+            let loadedBricks = [move, heart, strength, recovery, mind, fuel].compactMap { $0 }
+            
+            await MainActor.run {
+                self.bricks = loadedBricks
+                // Calculate overall progress (average of all bricks)
+                if !loadedBricks.isEmpty {
+                    self.todayProgress = loadedBricks.map { $0.progress }.reduce(0, +) / Double(loadedBricks.count)
+                } else {
+                    self.todayProgress = 0.0
+                }
+                self.isLoading = false
+                
+                // Reload widget timeline
+                WidgetCenter.shared.reloadTimelines(ofKind: "DailyBricksWidget")
+            }
         }
     }
     
-    // MARK: - Widget Data Sharing
+    // MARK: - Individual Brick Loading
     
-    private func shareDataWithWidget(summary: DailyBricksSummary) {
-        guard let sharedDefaults = sharedUserDefaults else { return }
-        
-        // Share individual brick data for widget access
-        if let moveBrick = summary.brick(for: .move) {
-            sharedDefaults.set(moveBrick.currentValue, forKey: "shared_workout_minutes")
-        }
-        
-        if let strengthBrick = summary.brick(for: .strength) {
-            sharedDefaults.set(strengthBrick.currentValue, forKey: "shared_strength_minutes")
-            sharedDefaults.set(strengthBrick.isComplete, forKey: "shared_strength_session")
-        }
-        
-        if let mindBrick = summary.brick(for: .mind) {
-            sharedDefaults.set(mindBrick.currentValue, forKey: "shared_meditation_minutes")
-        }
-        
-        if let fuelBrick = summary.brick(for: .fuel) {
-            sharedDefaults.set(fuelBrick.currentValue, forKey: "shared_meal_count")
-        }
-        
-        // Share overall summary
-        sharedDefaults.set(summary.overallProgress, forKey: "shared_overall_progress")
-        sharedDefaults.set(summary.completedCount, forKey: "shared_completed_count")
-        sharedDefaults.set(Date().timeIntervalSince1970, forKey: "shared_last_update")
-        
-        // Reload widget timelines
-        WidgetCenter.shared.reloadTimelines(ofKind: "DailyBricksWidget")
-    }
-    
-    // MARK: - Private Calculation Methods
-    
-    private func calculateMoveProgress(startOfDay: Date, now: Date) async -> DailyBrickProgress {
-        // Goal: 20 minutes of any workout
+    private func loadMoveData(startOfDay: Date) async -> DailyBrickProgress? {
         let goalMinutes = 20.0
-        
-        // Get workouts from HealthKit
-        var workoutMinutes = await getWorkoutMinutes(startOfDay: startOfDay, now: now, activityTypes: nil)
-        
-        // Also get workout data from our app database
-        let appWorkoutMinutes = await getAppWorkoutMinutes(startOfDay: startOfDay, now: now)
-        
-        // Use the maximum of HealthKit and app data (to avoid double counting)
-        workoutMinutes = max(workoutMinutes, appWorkoutMinutes)
-        
-        let progress = min(1.0, workoutMinutes / goalMinutes)
+        let minutes = await getWorkoutMinutesFromHealthKit(startOfDay: startOfDay)
+        let progress = min(1.0, minutes / goalMinutes)
         
         return DailyBrickProgress(
             type: .move,
             progress: progress,
-            currentValue: workoutMinutes,
+            currentValue: minutes,
             goalValue: goalMinutes,
             unit: "min"
         )
     }
     
-    private func calculateHeartProgress(startOfDay: Date, now: Date) async -> DailyBrickProgress {
-        // Goal: 30 minutes of cardio (running, biking, swimming, sports)
+    private func loadHeartData(startOfDay: Date) async -> DailyBrickProgress? {
         let goalMinutes = 30.0
-        
-        let cardioTypes: [HKWorkoutActivityType] = [
-            .running, .cycling, .swimming, .soccer, .basketball,
-            .tennis, .americanFootball, .baseball, .volleyball, .hockey
-        ]
-        
-        let cardioMinutes = await getWorkoutMinutes(startOfDay: startOfDay, now: now, activityTypes: cardioTypes)
-        
-        let progress = min(1.0, cardioMinutes / goalMinutes)
+        let minutes = await getCardioMinutesFromHealthKit(startOfDay: startOfDay)
+        let progress = min(1.0, minutes / goalMinutes)
         
         return DailyBrickProgress(
             type: .heart,
             progress: progress,
-            currentValue: cardioMinutes,
+            currentValue: minutes,
             goalValue: goalMinutes,
             unit: "min"
         )
     }
     
-    private func calculateStrengthProgress(startOfDay: Date, now: Date) async -> DailyBrickProgress {
-        // Goal: 1 gym/strength session OR 20 minutes
+    private func loadStrengthData(startOfDay: Date) async -> DailyBrickProgress? {
         let goalMinutes = 20.0
-        
-        let strengthTypes: [HKWorkoutActivityType] = [
-            .traditionalStrengthTraining, .crossTraining, .coreTraining,
-            .functionalStrengthTraining
-            // Note: .powerlifting and .weightlifting don't exist in HKWorkoutActivityType
-            // Use .traditionalStrengthTraining for all weightlifting activities
-        ]
-        
-        var strengthMinutes = await getWorkoutMinutes(startOfDay: startOfDay, now: now, activityTypes: strengthTypes)
-        
-        // Also check our app database for gym workouts
-        let appStrengthData = await getAppStrengthWorkoutData(startOfDay: startOfDay, now: now)
-        let appStrengthMinutes = appStrengthData.minutes
-        let hasAppSession = appStrengthData.hasSession
-        
-        // Use the maximum of HealthKit and app data
-        strengthMinutes = max(strengthMinutes, appStrengthMinutes)
-        
-        // Check if we have at least one session (binary completion)
-        let hasSession = strengthMinutes > 0 || hasAppSession
-        
-        // Progress: 100% if session exists, otherwise based on minutes
-        let progress = hasSession ? 1.0 : min(1.0, strengthMinutes / goalMinutes)
+        let minutes = await getStrengthMinutesFromHealthKit(startOfDay: startOfDay)
+        let progress = min(1.0, minutes / goalMinutes)
         
         return DailyBrickProgress(
             type: .strength,
             progress: progress,
-            currentValue: strengthMinutes,
+            currentValue: minutes,
             goalValue: goalMinutes,
             unit: "min"
         )
     }
     
-    private func calculateRecoveryProgress(startOfDay: Date, now: Date) async -> DailyBrickProgress {
-        // Goal: 15 minutes of recovery/balance activities (yoga, stretching, meditation)
-        // Progressive calculation - no penalty for working out
-        // Focus on balance through recovery activities
-        let goalMinutes = 15.0
-        
-        let recoveryTypes: [HKWorkoutActivityType] = [
-            .yoga, .flexibility, .mindAndBody
-        ]
-        
-        var recoveryMinutes = await getWorkoutMinutes(startOfDay: startOfDay, now: now, activityTypes: recoveryTypes)
-        
-        // Also check our app meditation data (meditation counts as recovery/balance)
-        let appGroupDefaults = UserDefaults(suiteName: "group.com.do.fitness")
-        if let meditationData = appGroupDefaults?.data(forKey: "meditationSessions"),
-           let sessions = try? JSONDecoder().decode([MeditationSessionData].self, from: meditationData) {
-            // Filter sessions for today and sum actual duration
-            let todaySessions = sessions.filter { session in
-                guard let startTimeString = session.startTime,
-                      let startTime = ISO8601DateFormatter().date(from: startTimeString) else {
-                    return false
-                }
-                return startTime >= startOfDay && startTime <= now && session.completed == true
-            }
-            
-            let meditationMinutes = todaySessions.reduce(0.0) { total, session in
-                total + (Double(session.actualDuration ?? 0) / 60.0)
-            }
-            
-            // Add meditation minutes to recovery (meditation is a form of recovery/balance)
-            recoveryMinutes += meditationMinutes
-        }
-        
-        // Progressive progress based on recovery activity minutes
-        let progress = min(1.0, recoveryMinutes / goalMinutes)
+    private func loadRecoveryData(startOfDay: Date) async -> DailyBrickProgress? {
+        // Recovery: 10 minutes of yoga/stretching
+        let goalMinutes = 10.0
+        let minutes = await getRecoveryMinutesFromHealthKit(startOfDay: startOfDay)
+        let progress = min(1.0, minutes / goalMinutes)
         
         return DailyBrickProgress(
             type: .recovery,
             progress: progress,
-            currentValue: recoveryMinutes,
+            currentValue: minutes,
             goalValue: goalMinutes,
             unit: "min"
         )
     }
     
-    private func calculateMindProgress(startOfDay: Date, now: Date) async -> DailyBrickProgress {
-        // Goal: 10 minutes of meditation/mindfulness
+    private func loadMindData(startOfDay: Date) async -> DailyBrickProgress? {
+        // Mind: 10 minutes of meditation
         let goalMinutes = 10.0
-        
-        // Get meditation from HealthKit (mindAndBody type)
-        var meditationMinutes = await getWorkoutMinutes(
-            startOfDay: startOfDay,
-            now: now,
-            activityTypes: [.mindAndBody]
-        )
-        
-        // Also check our own meditation tracking data from UserDefaults
-        let appGroupDefaults = UserDefaults(suiteName: "group.com.do.fitness")
-        if let meditationData = appGroupDefaults?.data(forKey: "meditationSessions"),
-           let sessions = try? JSONDecoder().decode([MeditationSessionData].self, from: meditationData) {
-            // Filter sessions for today and sum actual duration
-            let todaySessions = sessions.filter { session in
-                guard let startTimeString = session.startTime,
-                      let startTime = ISO8601DateFormatter().date(from: startTimeString) else {
-                    return false
-                }
-                return startTime >= startOfDay && startTime <= now && session.completed == true
-            }
-            
-            let appMeditationMinutes = todaySessions.reduce(0.0) { total, session in
-                total + (Double(session.actualDuration ?? 0) / 60.0)
-            }
-            
-            // Use the maximum of HealthKit and app data
-            meditationMinutes = max(meditationMinutes, appMeditationMinutes)
-        }
-        
-        let progress = min(1.0, meditationMinutes / goalMinutes)
+        let minutes = await getMeditationMinutesFromHealthKit(startOfDay: startOfDay)
+        let progress = min(1.0, minutes / goalMinutes)
         
         return DailyBrickProgress(
             type: .mind,
             progress: progress,
-            currentValue: meditationMinutes,
+            currentValue: minutes,
             goalValue: goalMinutes,
             unit: "min"
         )
     }
     
-    private func calculateFuelProgress(startOfDay: Date, now: Date) async -> DailyBrickProgress {
-        // Goal: 3 healthy meals logged OR water goal met
-        let waterGoal = 64.0 // 8 cups (64 oz)
-        let mealGoal = 3.0 // 3 healthy meals
-        
-        let waterIntake = await getWaterIntake(startOfDay: startOfDay, now: now)
-        
-        // Get meal count from our app data
-        var mealCount = 0.0
-        
-        // Check UserDefaults for food entries
-        let appGroupDefaults = UserDefaults(suiteName: "group.com.do.fitness")
-        if let foodData = appGroupDefaults?.data(forKey: "todaysFoods"),
-           let foods = try? JSONDecoder().decode([FoodEntryData].self, from: foodData) {
-            // Filter foods for today and count distinct meals
-            let todayFoods = foods.filter { food in
-                guard let timestampString = food.timestamp,
-                      let timestamp = ISO8601DateFormatter().date(from: timestampString) else {
-                    return false
-                }
-                return timestamp >= startOfDay && timestamp <= now
-            }
-            
-            // Count unique meal types (breakfast, lunch, dinner, snack)
-            let mealTypes = Set(todayFoods.compactMap { $0.mealType })
-            mealCount = Double(mealTypes.count)
-            
-            // Test logging
-            TrackingTestLogger.shared.logInfo(category: "FOOD", message: "Read \(foods.count) total entries, \(todayFoods.count) today, \(mealTypes.count) unique meal types from AppGroup")
-        } else {
-            // Test logging
-            TrackingTestLogger.shared.logInfo(category: "FOOD", message: "No food data in AppGroup, requesting from phone")
-            
-            // Fallback: Request from phone via WatchConnectivity
-            mealCount = await requestMealCountFromPhone(startOfDay: startOfDay, now: now)
-        }
-        
-        // Progress: 50% from water, 50% from meals
-        // If water goal is met OR 3 meals logged, it's complete
-        let waterProgress = min(1.0, waterIntake / waterGoal)
-        let mealProgress = min(1.0, mealCount / mealGoal)
-        
-        // Complete if either water goal OR meal goal is met
-        let progress = max(waterProgress, mealProgress)
-        
-        // For display, show the primary metric (meals if available, otherwise water)
-        let displayValue = mealCount > 0 ? mealCount : waterIntake
-        let displayUnit = mealCount > 0 ? "meals" : "oz"
-        let displayGoal = mealCount > 0 ? mealGoal : waterGoal
+    private func loadFuelData(startOfDay: Date) async -> DailyBrickProgress? {
+        // Fuel: 3 healthy meals or water goal
+        let goalMeals = 3.0
+        let mealCount = getSharedMealCount() ?? 0.0
+        let progress = min(1.0, mealCount / goalMeals)
         
         return DailyBrickProgress(
             type: .fuel,
             progress: progress,
-            currentValue: displayValue,
-            goalValue: displayGoal,
-            unit: displayUnit
+            currentValue: mealCount,
+            goalValue: goalMeals,
+            unit: "meals"
         )
     }
     
-    // MARK: - HealthKit Helpers
+    // MARK: - HealthKit Queries
     
-    private func getWorkoutMinutes(startOfDay: Date, now: Date, activityTypes: [HKWorkoutActivityType]?) async -> Double {
-        guard HKHealthStore.isHealthDataAvailable() else { return 0.0 }
+    private func getWorkoutMinutesFromHealthKit(startOfDay: Date) async -> Double {
+        let workoutType = HKObjectType.workoutType()
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startOfDay,
+            end: Date(),
+            options: .strictStartDate
+        )
         
         return await withCheckedContinuation { continuation in
-            let workoutType = HKObjectType.workoutType()
-            let predicate = HKQuery.predicateForSamples(
-                withStart: startOfDay,
-                end: now,
-                options: .strictStartDate
-            )
-            
             let query = HKSampleQuery(
                 sampleType: workoutType,
                 predicate: predicate,
@@ -412,17 +189,8 @@ class DailyBricksService: ObservableObject {
                     return
                 }
                 
-                var totalMinutes: Double = 0
-                
-                for workout in workouts {
-                    // Filter by activity type if specified
-                    if let activityTypes = activityTypes,
-                       !activityTypes.contains(workout.workoutActivityType) {
-                        continue
-                    }
-                    
-                    let duration = workout.duration // in seconds
-                    totalMinutes += duration / 60.0
+                let totalMinutes = workouts.reduce(0.0) { total, workout in
+                    total + workout.duration / 60.0
                 }
                 
                 continuation.resume(returning: totalMinutes)
@@ -432,134 +200,174 @@ class DailyBricksService: ObservableObject {
         }
     }
     
-    private func hasIntenseWorkoutToday(startOfDay: Date, now: Date) async -> Bool {
-        let intenseTypes: [HKWorkoutActivityType] = [
-            .running, .cycling, .swimming, .traditionalStrengthTraining,
-            .crossTraining, .soccer, .basketball, .tennis
-        ]
+    private func getCardioMinutesFromHealthKit(startOfDay: Date) async -> Double {
+        let workoutType = HKObjectType.workoutType()
         
-        let minutes = await getWorkoutMinutes(startOfDay: startOfDay, now: now, activityTypes: intenseTypes)
-        return minutes > 0
-    }
-    
-    private func getWaterIntake(startOfDay: Date, now: Date) async -> Double {
-        guard HKHealthStore.isHealthDataAvailable(),
-              let waterType = HKQuantityType.quantityType(forIdentifier: .dietaryWater) else {
-            return 0.0
-        }
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startOfDay,
+            end: Date(),
+            options: .strictStartDate
+        )
         
         return await withCheckedContinuation { continuation in
-            let predicate = HKQuery.predicateForSamples(
-                withStart: startOfDay,
-                end: now,
-                options: .strictStartDate
-            )
-            
-            let query = HKStatisticsQuery(
-                quantityType: waterType,
-                quantitySamplePredicate: predicate,
-                options: .cumulativeSum
-            ) { _, result, error in
-                guard let sum = result?.sumQuantity(), error == nil else {
+            let query = HKSampleQuery(
+                sampleType: workoutType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                guard let workouts = samples as? [HKWorkout], error == nil else {
                     continuation.resume(returning: 0.0)
                     return
                 }
                 
-                // Convert to fluid ounces
-                let fluidOunces = sum.doubleValue(for: HKUnit.fluidOunceUS())
-                continuation.resume(returning: fluidOunces)
+                // Filter for cardio workouts
+                let cardioTypes: Set<HKWorkoutActivityType> = [
+                    .running, .walking, .cycling, .rowing, .elliptical, .stairClimbing
+                ]
+                
+                let cardioMinutes = workouts
+                    .filter { cardioTypes.contains($0.workoutActivityType) }
+                    .reduce(0.0) { $0 + $1.duration / 60.0 }
+                
+                continuation.resume(returning: cardioMinutes)
             }
             
             healthStore.execute(query)
         }
     }
     
-    // MARK: - App Database Helpers
-    
-    private func getAppWorkoutMinutes(startOfDay: Date, now: Date) async -> Double {
-        // Request workout logs from phone via WatchConnectivity
+    private func getStrengthMinutesFromHealthKit(startOfDay: Date) async -> Double {
+        let workoutType = HKObjectType.workoutType()
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startOfDay,
+            end: Date(),
+            options: .strictStartDate
+        )
+        
         return await withCheckedContinuation { continuation in
-            var hasResumed = false
-            let resumeOnce: (Double) -> Void = { value in
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(returning: value)
-            }
-            
-            let message: [String: Any] = [
-                "type": "requestDailyBricksData",
-                "dataType": "workoutMinutes",
-                "startOfDay": startOfDay.timeIntervalSince1970,
-                "now": now.timeIntervalSince1970
-            ]
-            
-            WatchConnectivityManager.shared.sendMessage(message) { response in
-                if let minutes = response["workoutMinutes"] as? Double {
-                    resumeOnce(minutes)
-                } else {
-                    resumeOnce(0.0)
+            let query = HKSampleQuery(
+                sampleType: workoutType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                guard let workouts = samples as? [HKWorkout], error == nil else {
+                    continuation.resume(returning: 0.0)
+                    return
                 }
-            } errorHandler: { _ in
-                resumeOnce(0.0)
+                
+                let strengthTypes: Set<HKWorkoutActivityType> = [
+                    .traditionalStrengthTraining, .functionalStrengthTraining, .coreTraining
+                ]
+                
+                let strengthMinutes = workouts
+                    .filter { strengthTypes.contains($0.workoutActivityType) }
+                    .reduce(0.0) { $0 + $1.duration / 60.0 }
+                
+                continuation.resume(returning: strengthMinutes)
             }
+            
+            healthStore.execute(query)
         }
     }
     
-    private func getAppStrengthWorkoutData(startOfDay: Date, now: Date) async -> (minutes: Double, hasSession: Bool) {
-        // Request gym workout data from phone
+    private func getRecoveryMinutesFromHealthKit(startOfDay: Date) async -> Double {
+        let workoutType = HKObjectType.workoutType()
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startOfDay,
+            end: Date(),
+            options: .strictStartDate
+        )
+        
         return await withCheckedContinuation { continuation in
-            var hasResumed = false
-            let resumeOnce: (Double, Bool) -> Void = { minutes, hasSession in
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(returning: (minutes, hasSession))
+            let query = HKSampleQuery(
+                sampleType: workoutType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                guard let workouts = samples as? [HKWorkout], error == nil else {
+                    continuation.resume(returning: 0.0)
+                    return
+                }
+                
+                let recoveryTypes: Set<HKWorkoutActivityType> = [
+                    .yoga, .flexibility, .cooldown
+                ]
+                
+                let recoveryMinutes = workouts
+                    .filter { recoveryTypes.contains($0.workoutActivityType) }
+                    .reduce(0.0) { $0 + $1.duration / 60.0 }
+                
+                continuation.resume(returning: recoveryMinutes)
             }
             
-            let message: [String: Any] = [
-                "type": "requestDailyBricksData",
-                "dataType": "strengthWorkout",
-                "startOfDay": startOfDay.timeIntervalSince1970,
-                "now": now.timeIntervalSince1970
-            ]
-            
-            WatchConnectivityManager.shared.sendMessage(message) { response in
-                let minutes = response["strengthMinutes"] as? Double ?? 0.0
-                let hasSession = response["hasStrengthSession"] as? Bool ?? false
-                resumeOnce(minutes, hasSession)
-            } errorHandler: { _ in
-                resumeOnce(0.0, false)
-            }
+            healthStore.execute(query)
         }
     }
     
-    // MARK: - Phone Communication Helpers
-    
-    private func requestMealCountFromPhone(startOfDay: Date, now: Date) async -> Double {
+    private func getMeditationMinutesFromHealthKit(startOfDay: Date) async -> Double {
+        let workoutType = HKObjectType.workoutType()
+        
+        let predicate = HKQuery.predicateForSamples(
+            withStart: startOfDay,
+            end: Date(),
+            options: .strictStartDate
+        )
+        
         return await withCheckedContinuation { continuation in
-            var hasResumed = false
-            let resumeOnce: (Double) -> Void = { value in
-                guard !hasResumed else { return }
-                hasResumed = true
-                continuation.resume(returning: value)
-            }
-            
-            let message: [String: Any] = [
-                "type": "requestDailyBricksData",
-                "dataType": "mealCount",
-                "startOfDay": startOfDay.timeIntervalSince1970,
-                "now": now.timeIntervalSince1970
-            ]
-            
-            WatchConnectivityManager.shared.sendMessage(message) { response in
-                if let mealCount = response["mealCount"] as? Double {
-                    resumeOnce(mealCount)
-                } else {
-                    resumeOnce(0.0)
+            let query = HKSampleQuery(
+                sampleType: workoutType,
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                guard let workouts = samples as? [HKWorkout], error == nil else {
+                    continuation.resume(returning: 0.0)
+                    return
                 }
-            } errorHandler: { _ in
-                resumeOnce(0.0)
+                
+                let meditationMinutes = workouts
+                    .filter { $0.workoutActivityType == .mindAndBody }
+                    .reduce(0.0) { $0 + $1.duration / 60.0 }
+                
+                continuation.resume(returning: meditationMinutes)
             }
+            
+            healthStore.execute(query)
         }
+    }
+    
+    // MARK: - Shared Data (App Group)
+    
+    private func getSharedMealCount() -> Double? {
+        return userDefaults?.double(forKey: "dailyMealCount")
+    }
+    
+    private func getSharedWorkoutMinutes() -> Double? {
+        return userDefaults?.double(forKey: "dailyWorkoutMinutes")
+    }
+    
+    // MARK: - Save to App Group
+    
+    func saveWorkoutMinutes(_ minutes: Double) {
+        userDefaults?.set(minutes, forKey: "dailyWorkoutMinutes")
+        userDefaults?.synchronize()
+    }
+    
+    func saveMealCount(_ count: Double) {
+        userDefaults?.set(count, forKey: "dailyMealCount")
+        userDefaults?.synchronize()
+    }
+    
+    // MARK: - Computed Properties
+    
+    var summary: DailyBricksSummary? {
+        guard !bricks.isEmpty else { return nil }
+        return DailyBricksSummary(bricks: bricks, date: Date())
     }
 }
-
+#endif

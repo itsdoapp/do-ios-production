@@ -145,3 +145,4 @@ After building:
 - [ ] Watch is paired with iPhone
 - [ ] Clean build folder if issues persist
 
+

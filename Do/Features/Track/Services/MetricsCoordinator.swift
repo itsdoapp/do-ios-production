@@ -79,49 +79,175 @@ class MetricsCoordinator {
         }
     }
     
-    /// Process metrics received from watch
+    /// Process metrics received from watch with best value selection
     func processWatchMetrics(metrics: [String: Any]) {
         // Handle bike engine
         if let bikeEngine = bikeEngine {
-            // Extract metrics from dictionary
-            if let heartRate = metrics["heartRate"] as? Double, heartRate > 0 {
-                bikeEngine.heartRate = heartRate
+            // Heart Rate: Always prefer watch (more accurate sensor)
+            if let watchHeartRate = metrics["heartRate"] as? Double, watchHeartRate > 0 {
+                bikeEngine.heartRate = watchHeartRate
+                print("📱 [MetricsCoordinator] Updated heart rate from watch: \(watchHeartRate) BPM")
             }
             
-            if let cadence = metrics["cadence"] as? Double, cadence > 0 {
-                bikeEngine.cadence = cadence
+            // Cadence: Prefer watch if available
+            if let watchCadence = metrics["cadence"] as? Double, watchCadence > 0 {
+                bikeEngine.cadence = watchCadence
+                print("📱 [MetricsCoordinator] Updated cadence from watch: \(watchCadence)")
             }
             
-            if let distance = metrics["distance"] as? Double, distance > 0 {
-                // Only update if watch distance is greater (watch might be more accurate for indoor)
-                if distance > bikeEngine.distance.value {
-                    bikeEngine.distance = Measurement(value: distance, unit: UnitLength.meters)
+            // Distance: Use the higher value (more accurate - accounts for GPS drift)
+            if let watchDistance = metrics["distance"] as? Double, watchDistance > 0 {
+                let phoneDistance = bikeEngine.distance.value
+                if watchDistance > phoneDistance {
+                    bikeEngine.distance = Measurement(value: watchDistance, unit: UnitLength.meters)
+                    print("📱 [MetricsCoordinator] Updated distance from watch: \(watchDistance)m (was \(phoneDistance)m)")
+                } else {
+                    print("📱 [MetricsCoordinator] Keeping phone distance: \(phoneDistance)m (watch: \(watchDistance)m)")
                 }
             }
             
-            if let calories = metrics["calories"] as? Double, calories > 0 {
-                bikeEngine.calories = max(bikeEngine.calories, calories)
+            // Calories: Use the higher value (more conservative estimate)
+            if let watchCalories = metrics["calories"] as? Double, watchCalories > 0 {
+                let phoneCalories = bikeEngine.calories
+                let bestCalories = max(phoneCalories, watchCalories)
+                if bestCalories != phoneCalories {
+                    bikeEngine.calories = bestCalories
+                    print("📱 [MetricsCoordinator] Updated calories to best value: \(bestCalories) (watch: \(watchCalories), phone: \(phoneCalories))")
+                }
             }
+            
+            // Elapsed Time: Use the longer value (more accurate)
+            if let watchElapsedTime = metrics["elapsedTime"] as? TimeInterval, watchElapsedTime > 0 {
+                if watchElapsedTime > bikeEngine.elapsedTime {
+                    bikeEngine.elapsedTime = watchElapsedTime
+                    print("📱 [MetricsCoordinator] Updated elapsed time from watch: \(watchElapsedTime)s")
+                }
+            }
+            
+            // Pace: Recalculate from best distance/time if we updated distance
+            // (Pace will be recalculated by the engine based on updated distance)
         }
         
         // Handle walk engine
         if let walkEngine = walkEngine {
-            if let heartRate = metrics["heartRate"] as? Double, heartRate > 0 {
-                walkEngine.heartRate = heartRate
+            // Heart Rate: Always prefer watch (more accurate sensor)
+            if let watchHeartRate = metrics["heartRate"] as? Double, watchHeartRate > 0 {
+                walkEngine.heartRate = watchHeartRate
+                print("📱 [MetricsCoordinator] Updated heart rate from watch: \(watchHeartRate) BPM")
             }
             
-            if let distance = metrics["distance"] as? Double, distance > 0 {
-                if distance > walkEngine.distance.value {
-                    walkEngine.distance = Measurement(value: distance, unit: UnitLength.meters)
+            // Distance: Use the higher value (more accurate - accounts for GPS drift)
+            if let watchDistance = metrics["distance"] as? Double, watchDistance > 0 {
+                let phoneDistance = walkEngine.distance.value
+                // For outdoor walks, compare and use better value
+                // If phone is primary for distance (has good GPS), still compare to ensure we use best
+                if watchDistance > phoneDistance {
+                    walkEngine.distance = Measurement(value: watchDistance, unit: UnitLength.meters)
+                    print("📱 [MetricsCoordinator] Updated distance from watch: \(watchDistance)m (was \(phoneDistance)m)")
+                } else {
+                    print("📱 [MetricsCoordinator] Keeping phone distance: \(phoneDistance)m (watch: \(watchDistance)m)")
                 }
             }
             
-            if let calories = metrics["calories"] as? Double, calories > 0 {
-                walkEngine.calories = max(walkEngine.calories, calories)
+            // Calories: Use the higher value (more conservative estimate)
+            if let watchCalories = metrics["calories"] as? Double, watchCalories > 0 {
+                let phoneCalories = walkEngine.calories
+                let bestCalories = max(phoneCalories, watchCalories)
+                if bestCalories != phoneCalories {
+                    walkEngine.calories = bestCalories
+                    print("📱 [MetricsCoordinator] Updated calories to best value: \(bestCalories) (watch: \(watchCalories), phone: \(phoneCalories))")
+                }
+            }
+            
+            // Cadence: Prefer watch if available
+            if let watchCadence = metrics["cadence"] as? Double, watchCadence > 0 {
+                walkEngine.cadence = watchCadence
+                print("📱 [MetricsCoordinator] Updated cadence from watch: \(watchCadence)")
+            }
+            
+            // Elapsed Time: Use the longer value (more accurate)
+            if let watchElapsedTime = metrics["elapsedTime"] as? TimeInterval, watchElapsedTime > 0 {
+                if watchElapsedTime > walkEngine.elapsedTime {
+                    walkEngine.elapsedTime = watchElapsedTime
+                    print("📱 [MetricsCoordinator] Updated elapsed time from watch: \(watchElapsedTime)s")
+                }
+            }
+            
+            // Elevation: Use phone GPS if available, otherwise watch
+            if let watchElevation = metrics["elevationGain"] as? Double, watchElevation > 0 {
+                let phoneElevation = walkEngine.elevationGain.value
+                // Prefer phone GPS elevation, but use watch if phone doesn't have it
+                if phoneElevation == 0 || watchElevation > phoneElevation {
+                    walkEngine.elevationGain = Measurement(value: watchElevation, unit: UnitLength.meters)
+                    print("📱 [MetricsCoordinator] Updated elevation from watch: \(watchElevation)m")
+                }
             }
         }
         
-        print("📱 [MetricsCoordinator] Processed watch metrics")
+        // Handle run engine
+        if let runEngine = runEngine {
+            // Heart Rate: Always prefer watch
+            if let watchHeartRate = metrics["heartRate"] as? Double, watchHeartRate > 0 {
+                runEngine.heartRate = watchHeartRate
+                print("📱 [MetricsCoordinator] Updated heart rate from watch: \(watchHeartRate) BPM")
+            }
+            
+            // Distance: Use the higher value
+            if let watchDistance = metrics["distance"] as? Double, watchDistance > 0 {
+                let phoneDistance = runEngine.distance.value
+                if watchDistance > phoneDistance {
+                    runEngine.distance = Measurement(value: watchDistance, unit: UnitLength.meters)
+                    print("📱 [MetricsCoordinator] Updated distance from watch: \(watchDistance)m (was \(phoneDistance)m)")
+                }
+            }
+            
+            // Calories: Use the higher value
+            if let watchCalories = metrics["calories"] as? Double, watchCalories > 0 {
+                runEngine.calories = max(runEngine.calories, watchCalories)
+            }
+            
+            // Cadence: Prefer watch
+            if let watchCadence = metrics["cadence"] as? Double, watchCadence > 0 {
+                runEngine.cadence = watchCadence
+            }
+            
+            // Elapsed Time: Use the longer value
+            if let watchElapsedTime = metrics["elapsedTime"] as? TimeInterval, watchElapsedTime > 0 {
+                if watchElapsedTime > runEngine.elapsedTime {
+                    runEngine.elapsedTime = watchElapsedTime
+                }
+            }
+        }
+        
+        // Handle hike engine
+        if let hikeEngine = hikeEngine {
+            // Heart Rate: Always prefer watch
+            if let watchHeartRate = metrics["heartRate"] as? Double, watchHeartRate > 0 {
+                hikeEngine.heartRate = watchHeartRate
+            }
+            
+            // Distance: Use the higher value
+            if let watchDistance = metrics["distance"] as? Double, watchDistance > 0 {
+                let phoneDistance = hikeEngine.distance.value
+                if watchDistance > phoneDistance {
+                    hikeEngine.distance = Measurement(value: watchDistance, unit: UnitLength.meters)
+                }
+            }
+            
+            // Calories: Use the higher value
+            if let watchCalories = metrics["calories"] as? Double, watchCalories > 0 {
+                hikeEngine.calories = max(hikeEngine.calories, watchCalories)
+            }
+            
+            // Elapsed Time: Use the longer value
+            if let watchElapsedTime = metrics["elapsedTime"] as? TimeInterval, watchElapsedTime > 0 {
+                if watchElapsedTime > hikeEngine.elapsedTime {
+                    hikeEngine.elapsedTime = watchElapsedTime
+                }
+            }
+        }
+        
+        print("📱 [MetricsCoordinator] Processed watch metrics with best value selection")
     }
     
     /// Update metrics policy based on current conditions

@@ -110,3 +110,4 @@ This is not a bug - it's how watchOS apps work. The simulator installs apps, and
 | Normal development | Use ⌘R (accepts that it kills the other) |
 | Production testing | Use physical devices |
 
+

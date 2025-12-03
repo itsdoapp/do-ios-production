@@ -346,8 +346,8 @@ struct RunningWorkoutView: View {
     
     private func actuallyStartWorkout() {
         workoutStartTime = Date()
-        workoutCoordinator.startWorkout(type: .running, isIndoor: isIndoor)
-        healthKitManager.startWorkout(type: .running, isIndoor: isIndoor) // Start HealthKit tracking with location type
+        workoutCoordinator.startWorkout(type: WorkoutType.running)
+        healthKitManager.startWorkout(type: WorkoutType.running, isIndoor: isIndoor) // Start HealthKit tracking with location type
         isRunning = true
         startTimer()
         LiveMetricsSync.shared.startLiveSync()

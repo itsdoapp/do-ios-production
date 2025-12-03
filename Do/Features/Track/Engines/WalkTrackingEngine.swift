@@ -50,11 +50,7 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
 
     // MARK: - State
     @Published var state: WalkState = .notStarted {
-        didSet {
-            // Test logging
-            TrackingTestLogger.shared.logStateChange(category: "WALKING", oldState: oldValue.rawValue, newState: state.rawValue)
-            NotificationCenter.default.post(name: .didUpdateWalkState, object: nil)
-        }
+        didSet { NotificationCenter.default.post(name: .didUpdateWalkState, object: nil) }
     }
     @Published var walkingType: WalkingEngineType = .outdoorWalk
     // Compatibility with controllers that use RunType for walking
@@ -147,16 +143,6 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
     // MARK: - Control
     func start() {
         guard state == .notStarted || state == .ready else { return }
-        
-        // Test logging
-        TrackingTestLogger.shared.logTestStart(category: "WALKING", scenario: "Phone Only")
-        
-        // Request location permissions for workout tracking (needs "Always" for background)
-        if !isIndoorMode {
-            print("📍 Requesting location permissions for outdoor walk tracking")
-            ModernLocationManager.shared.requestWorkoutLocationAuthorization()
-        }
-        
         state = .inProgress
         startTime = Date()
         startTiming()
@@ -231,7 +217,7 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
             distance: distanceValue,
             elapsedTime: elapsedTime,
             heartRate: heartRate,
-            pace: useMetric ? 
+            pace: useMetric ?
                 pace.converted(to: .minutesPerKilometer).value : 
                 pace.converted(to: .minutesPerMile).value,
             calories: calories,
@@ -627,49 +613,83 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
         ]
     }
     
-    // Update metrics from watch data
+    // Update metrics from watch data with best value selection
     func updateMetricsFromWatch(_ metrics: [String: Any]) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // Test logging
-            TrackingTestLogger.shared.logSyncEvent(category: "WALKING", direction: "watchToPhone", data: metrics)
-            
-            // Always accept heart rate from watch (watch is always primary for HR)
-            if let heartRate = metrics["heartRate"] as? Double, heartRate > 0 {
-                print("📱 Updating heart rate from watch: \(heartRate)")
-                self.heartRate = heartRate
+            // Heart Rate: Always prefer watch (more accurate sensor)
+            if let watchHeartRate = metrics["heartRate"] as? Double, watchHeartRate > 0 {
+                self.heartRate = watchHeartRate
+                print("📱 [WalkEngine] Updated heart rate from watch: \(watchHeartRate) BPM")
             }
             
-            // Only accept other metrics if watch is primary for them
-            if !self.isPrimaryForDistance, let distance = metrics["distance"] as? Double, distance > 0 {
-                self.distance = Measurement(value: distance, unit: .meters)
+            // Distance: Use best value (higher is more accurate - accounts for GPS drift)
+            // Even if phone is primary, compare to ensure we use the best value
+            if let watchDistance = metrics["distance"] as? Double, watchDistance > 0 {
+                let phoneDistance = self.distance.value
+                if watchDistance > phoneDistance {
+                    // Watch has better distance, use it
+                    self.distance = Measurement(value: watchDistance, unit: .meters)
+                    print("📱 [WalkEngine] Updated distance from watch: \(watchDistance)m (was \(phoneDistance)m)")
+                } else if !self.isPrimaryForDistance {
+                    // Watch is primary but phone has better value, still use watch if it's the primary source
+                    // But log the comparison
+                    print("📱 [WalkEngine] Watch is primary but phone distance (\(phoneDistance)m) is higher than watch (\(watchDistance)m)")
+                }
             }
             
-            if let elapsedTime = metrics["elapsedTime"] as? TimeInterval {
-                self.elapsedTime = elapsedTime
+            // Elapsed Time: Always sync (use longer value for accuracy)
+            if let watchElapsedTime = metrics["elapsedTime"] as? TimeInterval, watchElapsedTime > 0 {
+                if watchElapsedTime > self.elapsedTime {
+                    self.elapsedTime = watchElapsedTime
+                    print("📱 [WalkEngine] Updated elapsed time from watch: \(watchElapsedTime)s")
+                }
             }
             
-            if !self.isPrimaryForCalories, let calories = metrics["calories"] as? Double, calories > 0 {
-                self.calories = calories
+            // Calories: Use best value (higher is more conservative)
+            if let watchCalories = metrics["calories"] as? Double, watchCalories > 0 {
+                let phoneCalories = self.calories
+                let bestCalories = max(phoneCalories, watchCalories)
+                if bestCalories != phoneCalories {
+                    self.calories = bestCalories
+                    print("📱 [WalkEngine] Updated calories to best value: \(bestCalories) (watch: \(watchCalories), phone: \(phoneCalories))")
+                }
             }
             
-            if !self.isPrimaryForCadence, let cadence = metrics["cadence"] as? Double, cadence > 0 {
-                self.cadence = cadence
+            // Cadence: Prefer watch if available (watch is better for cadence)
+            if let watchCadence = metrics["cadence"] as? Double, watchCadence > 0 {
+                self.cadence = watchCadence
+                print("📱 [WalkEngine] Updated cadence from watch: \(watchCadence)")
             }
             
-            if let elevationGain = metrics["elevationGain"] as? Double {
-                self.elevationGain = Measurement(value: elevationGain, unit: .meters)
+            // Elevation: Use best value (prefer phone GPS, but use watch if phone doesn't have it)
+            if let watchElevation = metrics["elevationGain"] as? Double, watchElevation > 0 {
+                let phoneElevation = self.elevationGain.value
+                // If phone has no elevation or watch has better value, use watch
+                if phoneElevation == 0 || watchElevation > phoneElevation {
+                    self.elevationGain = Measurement(value: watchElevation, unit: .meters)
+                    print("📱 [WalkEngine] Updated elevation from watch: \(watchElevation)m")
+                }
             }
             
-            if let pace = metrics["pace"] as? Double {
-                self.pace = Measurement(value: pace, unit: self.useMetric ? .minutesPerKilometer : .minutesPerMile)
+            // Pace: Recalculate from best distance/time (pace will be recalculated by engine)
+            // But if watch provides pace and phone doesn't have good GPS, use watch pace
+            if let watchPace = metrics["pace"] as? Double, watchPace > 0 {
+                // Only use watch pace if phone is not primary for pace (poor GPS)
+                if !self.isPrimaryForPace {
+                    self.pace = Measurement(value: watchPace, unit: self.useMetric ? .minutesPerKilometer : .minutesPerMile)
+                    print("📱 [WalkEngine] Updated pace from watch: \(watchPace)")
+                }
+                // Otherwise, pace will be recalculated from distance/time
             }
             
+            // Start time: Always accept from watch if provided
             if let startTimeInterval = metrics["startTime"] as? TimeInterval {
                 self.startTime = Date(timeIntervalSince1970: startTimeInterval)
             }
             
+            // Steps: Always accept from watch if provided
             if let steps = metrics["steps"] as? Int {
                 self.steps = steps
             }
@@ -1076,16 +1096,17 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
         if currentTime - lastWatchSyncTime < 2.0 { return }
         lastWatchSyncTime = currentTime
         
-        // Prepare metrics to send
+        // Prepare metrics to send - send all metrics so watch can use best value logic
+        // But indicate which ones phone is primary for
         let metricsToSend: [String: Any] = [
-            "distance": distance.value,
-            "elapsedTime": elapsedTime,
-            "heartRate": heartRate,
-            "calories": calories,
-            "cadence": cadence,
-            "elevationGain": elevationGain.value,
-            "pace": pace.value,
-            "steps": steps
+            "distance": isPrimaryForDistance ? distance.value : 0,  // Only send if phone is primary
+            "elapsedTime": elapsedTime,  // Always send elapsed time
+            "heartRate": isPrimaryForHeartRate ? heartRate : 0,  // Only send if phone is primary (rare)
+            "calories": isPrimaryForCalories ? calories : 0,  // Only send if phone is primary
+            "cadence": isPrimaryForCadence ? cadence : 0,  // Only send if phone is primary (rare)
+            "elevationGain": elevationGain.value,  // Always send elevation (phone GPS is better)
+            "pace": isPrimaryForPace ? pace.value : 0,  // Only send if phone is primary
+            "steps": steps  // Always send steps if available
         ]
         
         let updateData: [String: Any] = [
@@ -1190,11 +1211,16 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
             typesToRead.insert(bodyMassType)
         }
         
-        // Types to write to HealthKit (workouts, calories, distance)
+        // Types to write to HealthKit (workouts, calories, distance, heart rate)
         var typesToShare: Set<HKSampleType> = []
         
         // Workout type
         typesToShare.insert(HKObjectType.workoutType())
+        
+        // Heart rate (to write heart rate data from tracking)
+        if let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) {
+            typesToShare.insert(heartRateType)
+        }
         
         // Active energy burned
         if let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
@@ -1212,7 +1238,7 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
                 if success {
                     print("✅ HealthKit authorization granted for walking tracking")
                     print("   - Read: steps, heart rate, distance, body mass")
-                    print("   - Write: workouts, calories, distance")
+                    print("   - Write: workouts, heart rate, calories, distance")
                 } else if let error = error {
                     print("❌ HealthKit authorization failed: \(error.localizedDescription)")
                 } else {
@@ -1452,10 +1478,11 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
     // MARK: - Device Coordination
     
     // Establish initial device coordination roles
-    private func establishDeviceCoordination() {
+    func establishDeviceCoordination() {
         guard state != .notStarted && state != .completed else { return }
         
         let isIndoor = isIndoorMode || walkingType == .treadmillWalk
+        let wasWatchTracking = isWatchTracking // Remember if watch was tracking before
         
         if isIndoor {
             // For indoor walks, watch takes precedence for all metrics
@@ -1475,22 +1502,39 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
             // For outdoor walks, determine based on GPS quality
             isDashboardMode = false
             
+            // If watch was tracking (e.g., we're joining a workout started on watch),
+            // we still want to check if phone has good GPS and can take over
+            let watchStartedWorkout = wasWatchTracking || isJoiningExistingWorkout
+            
             // Check if we have good GPS data
             if hasGoodLocationData {
-                // Phone is primary for GPS-based metrics
+                // Phone is primary for GPS-based metrics (even if watch started the workout)
+                // Phone GPS is more accurate for outdoor distance/pace
                 isPrimaryForDistance = true
                 isPrimaryForPace = true
                 isPrimaryForHeartRate = false // Watch still better for HR
                 isPrimaryForCalories = true   // Phone can calculate calories with distance
                 isPrimaryForCadence = false   // Watch better for cadence
                 
-                // Test logging
-                TrackingTestLogger.shared.logCoordination(category: "WALKING", metric: "distance", primaryDevice: "phone", reason: "GPS-based outdoor tracking")
-                TrackingTestLogger.shared.logCoordination(category: "WALKING", metric: "steps", primaryDevice: "watch", reason: "Watch better for step counting")
-                TrackingTestLogger.shared.logCoordination(category: "WALKING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
-                
-                print("📱 Outdoor walk with good GPS: Phone primary for distance/pace")
-                print("⌚️ Watch primary for heart rate and cadence")
+                // If watch started the workout, we're now coordinating (not just dashboard)
+                if watchStartedWorkout {
+                    isWatchTracking = false // Phone is now tracking GPS-based metrics
+                    print("📱 Outdoor walk (joined from watch) with good GPS: Phone now primary for distance/pace")
+                    print("⌚️ Watch primary for heart rate and cadence")
+                    
+                    // Re-evaluate GPS quality after a few seconds to ensure it's stable
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                        guard let self = self, self.state.isActive else { return }
+                        // Re-check GPS quality and update coordination if needed
+                        if self.hasGoodLocationData && !self.isPrimaryForDistance {
+                            print("📱 GPS stabilized - re-establishing device coordination")
+                            self.establishDeviceCoordination()
+                        }
+                    }
+                } else {
+                    print("📱 Outdoor walk with good GPS: Phone primary for distance/pace")
+                    print("⌚️ Watch primary for heart rate and cadence")
+                }
             } else {
                 // Poor GPS quality, let watch take more metrics
                 isPrimaryForDistance = false
@@ -1500,7 +1544,21 @@ class WalkTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
                 isPrimaryForCadence = false
                 isWatchTracking = true
                 
-                print("📱 Outdoor walk with poor GPS: Deferring to watch for metrics")
+                if watchStartedWorkout {
+                    print("📱 Outdoor walk (joined from watch) with poor GPS: Watch remains primary for metrics")
+                } else {
+                    print("📱 Outdoor walk with poor GPS: Deferring to watch for metrics")
+                }
+                
+                // Re-evaluate GPS quality after a few seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                    guard let self = self, self.state.isActive else { return }
+                    // If GPS improves, re-establish coordination
+                    if self.hasGoodLocationData && self.isWatchTracking {
+                        print("📱 GPS improved - re-establishing device coordination")
+                        self.establishDeviceCoordination()
+                    }
+                }
             }
         }
         
@@ -1598,10 +1656,8 @@ extension WalkTrackingEngine {
                 "type": "handoffResponse",
                 "accepted": true,
                 "workoutId": workoutId.uuidString
-            ], replyHandler: { response in
-                print("📱 Watch acknowledged handoff response: \(response)")
-            }, errorHandler: { error in
-                print("📱 Error sending handoff response: \(error.localizedDescription)")
+            ], replyHandler: { _ in }, errorHandler: { error in
+                print("❌ Error sending handoff response: \(error.localizedDescription)")
             })
         }
     }

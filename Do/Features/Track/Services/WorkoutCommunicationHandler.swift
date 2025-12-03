@@ -130,15 +130,11 @@ extension WorkoutCommunicationHandler: WCSessionDelegate {
             switch type {
             case "requestActivePhoneWorkout":
                 // Check for active workouts across all tracking engines
-                if let activeWorkout = buildActiveWorkoutPayload() {
-                    replyHandler(activeWorkout)
-                } else {
-                    let response: [String: Any] = [
-                        "workoutActive": false,
-                        "timestamp": Date().timeIntervalSince1970
-                    ]
-                    replyHandler(response)
-                }
+                let response: [String: Any] = [
+                    "workoutActive": false,
+                    "timestamp": Date().timeIntervalSince1970
+                ]
+                replyHandler(response)
                 delegate?.workoutCommunicationHandler(self, didReceiveMessage: message)
                 
             case "requestDailyBricksData":
@@ -278,8 +274,12 @@ extension WorkoutCommunicationHandler: WCSessionDelegate {
            let foods = try? JSONDecoder().decode([WatchFoodEntryData].self, from: foodData) {
             // Filter foods for today
             let todayFoods = foods.filter { food in
-                guard let timestampString = food.timestamp,
-                      let timestamp = ISO8601DateFormatter().date(from: timestampString) else {
+                guard let timestampString = food.timestamp else {
+                    return false
+                }
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                guard let timestamp = formatter.date(from: timestampString) else {
                     return false
                 }
                 return timestamp >= startOfDay && timestamp <= now
@@ -319,76 +319,5 @@ extension WorkoutCommunicationHandler: WCSessionDelegate {
         
         // Forward to delegate for other handlers
         delegate?.workoutCommunicationHandler(self, didReceiveMessage: message)
-    }
-    
-    // MARK: - Active Workout Helpers
-    
-    private func buildActiveWorkoutPayload() -> [String: Any]? {
-        if let runningPayload = buildRunningWorkoutPayload() {
-            return runningPayload
-        }
-        // TODO: Extend to other workout engines (walking, biking, etc.)
-        return nil
-    }
-    
-    private func buildRunningWorkoutPayload() -> [String: Any]? {
-        let engine = RunTrackingEngine.shared
-        let isActive = engine.runState == .running || engine.runState == .paused
-        
-        guard isActive else { return nil }
-        
-        let metrics: [String: Any] = [
-            "distance": engine.distance.value,
-            "elapsedTime": engine.elapsedTime,
-            "calories": engine.calories,
-            "heartRate": engine.heartRate,
-            "pace": engine.pace.value,
-            "cadence": engine.cadence
-        ]
-        
-        var payload: [String: Any] = [
-            "type": "workoutUpdate",
-            "workoutActive": true,
-            "hasActiveWorkout": true,
-            "workoutType": "running",
-            "runType": engine.runType.rawValue,
-            "state": engine.runState.rawValue,
-            "runState": engine.runState.rawValue,
-            "elapsedTime": engine.elapsedTime,
-            "distance": engine.distance.value,
-            "calories": engine.calories,
-            "heartRate": engine.heartRate,
-            "pace": engine.pace.value,
-            "cadence": engine.cadence,
-            "metrics": metrics,
-            "id": engine.workoutId.uuidString,
-            "timestamp": Date().timeIntervalSince1970,
-            "isIndoor": engine.isIndoorMode,
-            "isIndoorMode": engine.isIndoorMode,
-            "isWatchTracking": engine.isWatchTracking,
-            "hasGoodLocationData": engine.hasGoodLocationData,
-            "isPrimaryForDistance": engine.isPrimaryForDistance,
-            "isPrimaryForPace": engine.isPrimaryForPace,
-            "isPrimaryForHeartRate": engine.isPrimaryForHeartRate,
-            "isPrimaryForCalories": engine.isPrimaryForCalories,
-            "isPrimaryForCadence": engine.isPrimaryForCadence,
-            "isDashboardMode": isDashboardMode,
-            "useImperialUnits": !engine.useMetric
-        ]
-        
-        // Ensure booleans are explicitly Bool for WatchConnectivity serialization safety
-        payload["isPrimaryForDistance"] = Bool(engine.isPrimaryForDistance)
-        payload["isPrimaryForPace"] = Bool(engine.isPrimaryForPace)
-        payload["isPrimaryForHeartRate"] = Bool(engine.isPrimaryForHeartRate)
-        payload["isPrimaryForCalories"] = Bool(engine.isPrimaryForCalories)
-        payload["isPrimaryForCadence"] = Bool(engine.isPrimaryForCadence)
-        payload["isWatchTracking"] = Bool(engine.isWatchTracking)
-        payload["isDashboardMode"] = Bool(isDashboardMode)
-        
-        if let userPayload = CurrentUserService.shared.userSyncPayload() {
-            payload["user"] = userPayload
-        }
-        
-        return payload
     }
 }

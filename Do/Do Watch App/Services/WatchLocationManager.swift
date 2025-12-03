@@ -2,241 +2,126 @@
 //  WatchLocationManager.swift
 //  Do Watch App
 //
-//  Location tracking for watch workouts
+//  Location manager for watchOS workouts
 //  Copyright © 2025 Mikiyas Tadesse. All rights reserved.
 //
 
+#if os(watchOS)
 import Foundation
 import CoreLocation
 import Combine
 
-// MARK: - Location Data Model
-
-struct WatchLocationData: Codable {
-    let latitude: Double
-    let longitude: Double
-    let altitude: Double
-    let horizontalAccuracy: Double
-    let verticalAccuracy: Double
-    let course: Double
-    let speed: Double
-    let timestamp: Date
-    let heartRate: Double?
-    let cadence: Double?
-    
-    init(from location: CLLocation, heartRate: Double? = nil, cadence: Double? = nil) {
-        self.latitude = location.coordinate.latitude
-        self.longitude = location.coordinate.longitude
-        self.altitude = location.altitude
-        self.horizontalAccuracy = location.horizontalAccuracy
-        self.verticalAccuracy = location.verticalAccuracy
-        self.course = location.course
-        self.speed = location.speed
-        self.timestamp = location.timestamp
-        self.heartRate = heartRate
-        self.cadence = cadence
-    }
-    
-    func toDictionary() -> [String: Any] {
-        var dict: [String: Any] = [
-            "latitude": latitude,
-            "longitude": longitude,
-            "altitude": altitude,
-            "horizontalAccuracy": horizontalAccuracy,
-            "verticalAccuracy": verticalAccuracy,
-            "course": course,
-            "speed": speed,
-            "timestamp": timestamp.timeIntervalSince1970
-        ]
-        if let hr = heartRate {
-            dict["heartRate"] = hr
-        }
-        if let cad = cadence {
-            dict["cadence"] = cad
-        }
-        return dict
-    }
-    
-    func distance(from other: WatchLocationData) -> Double {
-        let location1 = CLLocation(latitude: latitude, longitude: longitude)
-        let location2 = CLLocation(latitude: other.latitude, longitude: other.longitude)
-        return location1.distance(from: location2)
-    }
-}
-
-// MARK: - Watch Location Manager
-
-@MainActor
-class WatchLocationManager: NSObject, ObservableObject {
+class WatchLocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = WatchLocationManager()
     
+    private let locationManager = CLLocationManager()
+    @Published var locationList: [CLLocation] = []
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var currentLocation: CLLocation?
-    @Published var locationList: [WatchLocationData] = []
-    @Published var isTracking = false
     
-    private let locationManager = CLLocationManager()
-    private var lastLocationUpdate: Date?
-    private let minUpdateInterval: TimeInterval = 1.0 // Minimum 1 second between updates
+    private var isTracking = false
     
     private override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 5 // Update every 5 meters
+        locationManager.distanceFilter = 5.0 // Update every 5 meters
         locationManager.activityType = .fitness
         authorizationStatus = locationManager.authorizationStatus
     }
     
-    // MARK: - Authorization
+    // MARK: - Public Methods
     
     func requestAuthorization() {
-        let currentStatus = locationManager.authorizationStatus
-        print("📍 [WatchLocationManager] Current authorization status: \(currentStatus.rawValue)")
-        
-        if currentStatus == .notDetermined {
-            print("📍 [WatchLocationManager] Requesting when-in-use authorization")
+        if authorizationStatus == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
-        } else if currentStatus == .authorizedWhenInUse {
-            print("📍 [WatchLocationManager] Already authorized when-in-use")
-            // For watch workouts, when-in-use is sufficient
-        } else if currentStatus == .authorizedAlways {
-            print("📍 [WatchLocationManager] Already authorized always")
-        } else {
-            print("⚠️ [WatchLocationManager] Authorization denied or restricted: \(currentStatus.rawValue)")
         }
     }
-    
-    // MARK: - Location Tracking
     
     func startTracking() {
-        // Check current status (it may have changed)
-        let currentStatus = locationManager.authorizationStatus
-        
-        if currentStatus == .notDetermined {
-            print("📍 [WatchLocationManager] Authorization not determined - requesting")
+        // Request authorization if not determined
+        if authorizationStatus == .notDetermined {
+            print("📍 Requesting location authorization...")
             requestAuthorization()
-            // Wait for authorization callback
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.checkAndStartTracking()
-            }
+            // Will continue in locationManagerDidChangeAuthorization callback
             return
         }
         
-        guard currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways else {
-            print("⚠️ [WatchLocationManager] Cannot start tracking - authorization: \(currentStatus.rawValue)")
-            print("⚠️ Please enable location permissions in Settings")
+        guard authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways else {
+            print("⚠️ Location authorization not granted: \(authorizationStatus.rawValue)")
             return
         }
         
-        checkAndStartTracking()
-    }
-    
-    private func checkAndStartTracking() {
-        let currentStatus = locationManager.authorizationStatus
-        guard currentStatus == .authorizedWhenInUse || currentStatus == .authorizedAlways else {
-            print("⚠️ [WatchLocationManager] Still not authorized: \(currentStatus.rawValue)")
-            return
+        if !isTracking {
+            locationManager.startUpdatingLocation()
+            isTracking = true
+            locationList.removeAll()
+            print("📍 Started location tracking")
         }
-        
-        guard !isTracking else {
-            print("⚠️ [WatchLocationManager] Already tracking")
-            return
-        }
-        
-        print("📍 [WatchLocationManager] Starting location tracking with status: \(currentStatus.rawValue)")
-        locationList.removeAll()
-        isTracking = true
-        
-        // Ensure delegate is set
-        if locationManager.delegate !== self {
-            locationManager.delegate = self
-        }
-        
-        locationManager.startUpdatingLocation()
     }
     
     func stopTracking() {
-        guard isTracking else { return }
-        
-        print("📍 [WatchLocationManager] Stopping location tracking (collected \(locationList.count) locations)")
-        locationManager.stopUpdatingLocation()
-        isTracking = false
+        if isTracking {
+            locationManager.stopUpdatingLocation()
+            isTracking = false
+            print("📍 Stopped location tracking")
+        }
     }
     
     func clearLocations() {
         locationList.removeAll()
-    }
-    
-    // MARK: - Location Access
-    
-    func getLocationList() -> [WatchLocationData] {
-        return locationList
+        print("📍 Cleared location list")
     }
     
     func getLocationListAsDictionary() -> [[String: Any]] {
-        return locationList.map { $0.toDictionary() }
-    }
-}
-
-// MARK: - CLLocationManagerDelegate
-
-extension WatchLocationManager: CLLocationManagerDelegate {
-    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        Task { @MainActor in
-            let oldStatus = self.authorizationStatus
-            self.authorizationStatus = manager.authorizationStatus
-            print("📍 [WatchLocationManager] Authorization changed: \(oldStatus.rawValue) → \(manager.authorizationStatus.rawValue)")
-            
-            // If we're trying to track and just got authorization, start tracking
-            if (manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways) && !self.isTracking {
-                // Check if we should start (e.g., if there's an active workout)
-                // This will be handled by the workout views calling startTracking()
-                print("📍 [WatchLocationManager] Authorization granted - ready to track")
-            }
+        return locationList.map { location in
+            [
+                "latitude": location.coordinate.latitude,
+                "longitude": location.coordinate.longitude,
+                "altitude": location.altitude,
+                "horizontalAccuracy": location.horizontalAccuracy,
+                "verticalAccuracy": location.verticalAccuracy,
+                "course": location.course,
+                "speed": location.speed,
+                "timestamp": location.timestamp.timeIntervalSince1970
+            ]
         }
     }
     
-    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    // MARK: - CLLocationManagerDelegate
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         
-        // Filter out invalid locations
-        guard location.horizontalAccuracy > 0 && location.horizontalAccuracy < 100 else {
-            print("⚠️ [WatchLocationManager] Invalid location accuracy: \(location.horizontalAccuracy)")
-            return
-        }
-        
-        Task { @MainActor in
-            // Throttle updates
-            let now = Date()
-            if let lastUpdate = self.lastLocationUpdate,
-               now.timeIntervalSince(lastUpdate) < self.minUpdateInterval {
-                return
-            }
-            
-            self.lastLocationUpdate = now
+        DispatchQueue.main.async {
             self.currentLocation = location
             
-            // Get current heart rate and cadence from HealthKit if available
-            let heartRate: Double? = await HealthKitWorkoutManager.shared.getCurrentMetrics()?.heartRate
-            let cadence: Double? = await HealthKitWorkoutManager.shared.getCurrentMetrics()?.cadence
-            
-            // Create location data
-            let locationData = WatchLocationData(from: location, heartRate: heartRate, cadence: cadence)
-            
-            // Add to list if it's a new location
-            if self.locationList.isEmpty {
-                self.locationList = [locationData]
-            } else if let lastLocation = self.locationList.last,
-                      lastLocation.distance(from: locationData) > 2.0 { // Only add if moved > 2 meters
-                self.locationList.append(locationData)
-                print("📍 [WatchLocationManager] Added location #\(self.locationList.count): (\(location.coordinate.latitude), \(location.coordinate.longitude))")
+            // Only add locations with good accuracy
+            if location.horizontalAccuracy > 0 && location.horizontalAccuracy < 50 {
+                self.locationList.append(location)
+                print("📍 Location updated: \(location.coordinate.latitude), \(location.coordinate.longitude) (accuracy: \(location.horizontalAccuracy)m)")
             }
         }
     }
     
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("❌ [WatchLocationManager] Location error: \(error.localizedDescription)")
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("❌ Location error: \(error.localizedDescription)")
+    }
+    
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        DispatchQueue.main.async {
+            let oldStatus = self.authorizationStatus
+            self.authorizationStatus = manager.authorizationStatus
+            print("📍 Location authorization changed: \(oldStatus.rawValue) → \(manager.authorizationStatus.rawValue)")
+            
+            // If authorization was just granted and we're not tracking yet, start tracking
+            if (oldStatus == .notDetermined || oldStatus == .denied || oldStatus == .restricted) &&
+               (manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways) &&
+               !self.isTracking {
+                print("📍 Authorization granted, starting location tracking")
+                self.startTracking()
+            }
+        }
     }
 }
-
+#endif

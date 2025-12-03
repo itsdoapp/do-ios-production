@@ -85,7 +85,7 @@ extension Color {
             }
         case .partlyCloudy:
             if isNight {
-                return (Color(hex: 0x2c3e50), Color(hex: 0x34495e)) // Dark gray-blue
+                return (Color(hex: 0x1a1a2e), Color(hex: 0x16213e)) // Same as clear night for realism
             } else {
                 return (Color(hex: 0x74b9ff), Color(hex: 0x0984e3)) // Light blue with clouds
             }

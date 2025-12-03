@@ -128,3 +128,4 @@ Required permissions (requested in `WatchApp.swift`):
 4. Verify data syncs to Health app
 5. Test background tracking during workouts
 
+

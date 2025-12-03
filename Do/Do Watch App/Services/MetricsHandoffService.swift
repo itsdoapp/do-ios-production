@@ -29,67 +29,75 @@ class MetricsHandoffService {
         connectivityManager.sendMessage(message)
     }
     
-    func receiveMetricsFromPhone(_ metricsDict: [String: Any]) -> WorkoutMetrics? {
-        guard let metrics = WorkoutMetrics.fromDictionary(metricsDict) else {
+    func receiveMetricsFromPhone(_ metricsDict: [String: Any], coordinationFlags: [String: Any]? = nil) -> WorkoutMetrics? {
+        guard let phoneMetrics = WorkoutMetrics.fromDictionary(metricsDict) else {
             return nil
         }
         
-        // Update local workout if active
-        if var workout = WatchWorkoutCoordinator.shared.activeWorkout {
-            workout.metrics = metrics
-            workout.lastUpdateDate = Date()
-            WatchWorkoutCoordinator.shared.activeWorkout = workout
+        // Update coordination flags if provided
+        if let flags = coordinationFlags {
+            WatchWorkoutCoordinator.shared.updateCoordinationFlags(from: flags)
         }
         
-        return metrics
+        // Merge with watch metrics using best value logic
+        guard var workout = WatchWorkoutCoordinator.shared.activeWorkout else {
+            return phoneMetrics
+        }
+        
+        let watchMetrics = workout.metrics
+        let mergedMetrics = mergeMetrics(
+            phoneMetrics: phoneMetrics,
+            watchMetrics: watchMetrics,
+            workoutType: workout.workoutType
+        )
+        
+        // Update workout with merged metrics
+        workout.metrics = mergedMetrics
+        workout.lastUpdateDate = Date()
+        WatchWorkoutCoordinator.shared.activeWorkout = workout
+        
+        return mergedMetrics
     }
     
-    // MARK: - Metrics Merging
+    // MARK: - Metrics Merging (Best Value Logic)
     
     func mergeMetrics(phoneMetrics: WorkoutMetrics, watchMetrics: WorkoutMetrics, workoutType: WorkoutType) -> WorkoutMetrics {
         var merged = WorkoutMetrics()
         
-        // Distance: Use phone for GPS-based workouts (more accurate)
-        if workoutType == .running || workoutType == .biking || workoutType == .hiking || workoutType == .walking {
-            merged.distance = phoneMetrics.distance > 0 ? phoneMetrics.distance : watchMetrics.distance
-        } else {
-            merged.distance = watchMetrics.distance > 0 ? watchMetrics.distance : phoneMetrics.distance
-        }
+        // Distance: Use the higher value (best value strategy)
+        merged.distance = max(phoneMetrics.distance, watchMetrics.distance)
         
-        // Elapsed time: Use the longer one (more accurate)
+        // Elapsed time: Use the longer value (more accurate)
         merged.elapsedTime = max(phoneMetrics.elapsedTime, watchMetrics.elapsedTime)
         
-        // Heart rate: Prefer watch (usually more accurate)
+        // Heart rate: Always prefer watch (more accurate sensor)
         merged.heartRate = watchMetrics.heartRate > 0 ? watchMetrics.heartRate : phoneMetrics.heartRate
         
-        // Pace: Calculate from distance and time, or use phone if available
+        // Pace: Calculate from best distance/time, or use phone GPS-based if available
         if merged.distance > 0 && merged.elapsedTime > 0 {
             merged.pace = merged.elapsedTime / merged.distance
         } else {
+            // Use phone GPS-based pace if available, otherwise watch
             merged.pace = phoneMetrics.pace > 0 ? phoneMetrics.pace : watchMetrics.pace
         }
         
-        // Calories: Average or use higher value
-        if phoneMetrics.calories > 0 && watchMetrics.calories > 0 {
-            merged.calories = (phoneMetrics.calories + watchMetrics.calories) / 2.0
-        } else {
-            merged.calories = max(phoneMetrics.calories, watchMetrics.calories)
-        }
+        // Calories: Use the higher value (more conservative estimate)
+        merged.calories = max(phoneMetrics.calories, watchMetrics.calories)
         
-        // Cadence: Prefer watch
+        // Cadence: Prefer watch if available, otherwise phone
         merged.cadence = watchMetrics.cadence ?? phoneMetrics.cadence
         
-        // Elevation: Use phone (GPS-based)
+        // Elevation: Prefer phone GPS, fall back to watch
         merged.elevationGain = phoneMetrics.elevationGain ?? watchMetrics.elevationGain
         
-        // Average pace: Calculate or use phone
+        // Average pace: Calculate from best distance/time
         if merged.distance > 0 && merged.elapsedTime > 0 {
             merged.averagePace = merged.elapsedTime / merged.distance
         } else {
             merged.averagePace = phoneMetrics.averagePace ?? watchMetrics.averagePace
         }
         
-        // Current speed: Use phone for GPS-based
+        // Current speed: Prefer phone GPS-based, fall back to watch
         merged.currentSpeed = phoneMetrics.currentSpeed ?? watchMetrics.currentSpeed
         
         return merged

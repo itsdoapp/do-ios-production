@@ -187,9 +187,6 @@ class BikeTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             // Log state changes
             print("📱 Updated bikeState: \(oldValue) => \(bikeState)")
             
-            // Test logging
-            TrackingTestLogger.shared.logStateChange(category: "CYCLING", oldState: oldValue.rawValue, newState: bikeState.rawValue)
-            
             // Post notification for state change
             NotificationCenter.default.post(name: .bikeTrackingEngineDidUpdateState, object: nil)
         }
@@ -2153,6 +2150,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     /// Initial setup to prepare the run tracker
     func setup() {
+        // Request permissions before starting (location and HealthKit including heart rate)
+        requestPermissions()
+        
         // Apply current run settings
         loadSettings()
         
@@ -2186,9 +2186,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         // Start the timer
         startTimer()
         
-        // Request location updates for outdoor runs
+        // Request location updates for outdoor runs (will be handled by ModernLocationManager)
         if !isIndoorMode {
-            locationManager.startUpdatingLocation()
+            locationManager.startTracking()
         }
         
         // Send updates to observers
@@ -2320,12 +2320,6 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         
         // Update state
         bikeState = .active
-        
-        // Request location permissions for workout tracking (needs "Always" for background)
-        if !isIndoorMode {
-            print("📍 Requesting location permissions for outdoor bike tracking")
-            ModernLocationManager.shared.requestWorkoutLocationAuthorization()
-        }
         
         // Update formatted values
         updateFormattedValues()
@@ -2474,29 +2468,46 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     
     // Establish initial device coordination roles
-    private func establishDeviceCoordination() {
+     func establishDeviceCoordination() {
         guard bikeState != .notStarted else { return }
         
-        // For outdoor runs, determine based on GPS quality
+        // For outdoor biking, determine based on GPS quality
         isDashboardMode = false
+        let wasWatchTracking = isWatchTracking // Remember if watch was tracking before
+        
+        // If watch was tracking (e.g., we're joining a workout started on watch),
+        // we still want to check if phone has good GPS and can take over
+        let watchStartedWorkout = wasWatchTracking || isJoiningExistingWorkout
         
         // Check if we have good GPS data
         if hasGoodLocationData {
-            // Phone is primary for GPS-based metrics
+            // Phone is primary for GPS-based metrics (even if watch started the workout)
+            // Phone GPS is more accurate for outdoor distance/pace
             isPrimaryForDistance = true
             isPrimaryForPace = true
             isPrimaryForHeartRate = false // Watch still better for HR
             isPrimaryForCalories = true   // Phone can calculate calories with distance
             isPrimaryForCadence = false   // Watch better for cadence
             
-            // Test logging
-            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "distance", primaryDevice: "phone", reason: "GPS-based outdoor tracking")
-            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "pace", primaryDevice: "phone", reason: "Calculated from GPS distance")
-            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
-            TrackingTestLogger.shared.logCoordination(category: "CYCLING", metric: "cadence", primaryDevice: "watch", reason: "Watch better for cadence")
-            
-            print("📱 Outdoor run with good GPS: Phone primary for distance/pace")
-            print("⌚️ Watch primary for heart rate and cadence")
+            // If watch started the workout, we're now coordinating (not just dashboard)
+            if watchStartedWorkout {
+                isWatchTracking = false // Phone is now tracking GPS-based metrics
+                print("📱 Outdoor bike (joined from watch) with good GPS: Phone now primary for distance/pace")
+                print("⌚️ Watch primary for heart rate and cadence")
+                
+                // Re-evaluate GPS quality after a few seconds to ensure it's stable
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                    guard let self = self, self.bikeState.isActive else { return }
+                    // Re-check GPS quality and update coordination if needed
+                    if self.hasGoodLocationData && !self.isPrimaryForDistance {
+                        print("📱 GPS stabilized - re-establishing device coordination")
+                        self.establishDeviceCoordination()
+                    }
+                }
+            } else {
+                print("📱 Outdoor bike with good GPS: Phone primary for distance/pace")
+                print("⌚️ Watch primary for heart rate and cadence")
+            }
         } else {
             // Poor GPS quality, let watch take more metrics
             isPrimaryForDistance = false
@@ -2506,7 +2517,21 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             isPrimaryForCadence = false
             isWatchTracking = true
             
-            print("📱 Outdoor run with poor GPS: Deferring to watch for metrics")
+            if watchStartedWorkout {
+                print("📱 Outdoor bike (joined from watch) with poor GPS: Watch remains primary for metrics")
+            } else {
+                print("📱 Outdoor bike with poor GPS: Deferring to watch for metrics")
+            }
+            
+            // Re-evaluate GPS quality after a few seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                guard let self = self, self.bikeState.isActive else { return }
+                // If GPS improves, re-establish coordination
+                if self.hasGoodLocationData && self.isWatchTracking {
+                    print("📱 GPS improved - re-establishing device coordination")
+                    self.establishDeviceCoordination()
+                }
+            }
         }
         
         // Update metrics coordinator policy
@@ -3871,26 +3896,37 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     }
     
     private func requestPermissions() {
-        // Request location permissions for workout tracking (needs "Always" for background)
-        // Use ModernLocationManager to avoid UI unresponsiveness warnings
-        ModernLocationManager.shared.requestWorkoutLocationAuthorization()
+        // Request location permissions
+        let locationStatus = locationManager.authorizationStatus
+        if locationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+        } else if locationStatus == .authorizedWhenInUse {
+            // Request "Always" authorization for background tracking
+            locationManager.requestAlwaysAuthorization()
+        }
         
-        // Request HealthKit permissions
+        // Request HealthKit permissions - ensure heart rate is included
         if HKHealthStore.isHealthDataAvailable() {
             let typesToShare: Set<HKSampleType> = [
                 HKObjectType.workoutType(),
+                HKQuantityType.quantityType(forIdentifier: .heartRate)!,
                 HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
                 HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)!
             ]
             
             let typesToRead: Set<HKObjectType> = [
+                HKObjectType.workoutType(),
                 HKObjectType.quantityType(forIdentifier: .heartRate)!,
+                HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
+                HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
                 HKObjectType.quantityType(forIdentifier: .bodyMass)!
             ]
             
             healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { (success, error) in
                 if let error = error {
-                    print("HealthKit authorization error: \(error.localizedDescription)")
+                    print("❌ HealthKit authorization error: \(error.localizedDescription)")
+                } else if success {
+                    print("✅ HealthKit authorization granted (including heart rate)")
                 }
             }
         }
@@ -5009,9 +5045,6 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         // Log what we're sending to help with debugging
         print("📱 Syncing with watch: state=\(bikeState.rawValue), isPrimaryForDistance=\(isPrimaryForDistance), isIndoor=\(isIndoorMode)")
         
-        // Test logging
-        TrackingTestLogger.shared.logSyncEvent(category: "CYCLING", direction: "phoneToWatch", data: updateData)
-        
         session.sendMessage(updateData, replyHandler: { response in
             if let status = response["status"] as? String, status == "success" {
                 // Watch received the update
@@ -5318,14 +5351,14 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             let currentIsPrimaryForCalories = self.isPrimaryForCalories
             let currentIsPrimaryForCadence = self.isPrimaryForCadence
             
-            // Prepare metrics for the watch
+            // Prepare metrics for the watch - only send metrics that phone is primary for
             let metrics: [String: Any] = [
-                "distance": currentDistance,
-                "pace": currentPace,
-                "elapsedTime": currentElapsedTime,
-                "calories": currentCalories,
-                "heartRate": currentHeartRate,
-                "cadence": currentCadence,
+                "distance": currentIsPrimaryForDistance ? currentDistance : 0,
+                "pace": currentIsPrimaryForPace ? currentPace : 0,
+                "elapsedTime": currentElapsedTime,  // Always send elapsed time
+                "calories": currentIsPrimaryForCalories ? currentCalories : 0,
+                "heartRate": currentIsPrimaryForHeartRate ? currentHeartRate : 0,
+                "cadence": currentIsPrimaryForCadence ? currentCadence : 0,
                 "timestamp": Date().timeIntervalSince1970
             ]
             

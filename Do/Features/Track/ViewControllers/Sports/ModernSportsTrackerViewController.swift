@@ -385,11 +385,11 @@ struct SportsTrackerView: View {
     
     var body: some View {
         ZStack {
-            // Background with orange/sports-themed gradient
+            // Background matching weather view color scheme for better harmony
             LinearGradient(
                 gradient: Gradient(colors: [
-                    Color(UIColor(red: 0.15, green: 0.1, blue: 0.05, alpha: 1.0)),
-                    Color(UIColor(red: 0.25, green: 0.15, blue: 0.1, alpha: 1.0))
+                    Color(hex: 0x1a1a2e), // Match weather view night gradient top
+                    Color(hex: 0x16213e)  // Match weather view night gradient bottom
                 ]),
                 startPoint: .top,
                 endPoint: .bottom
@@ -525,7 +525,22 @@ struct SportsTrackerView: View {
                         }
                     }
                 case .partlyCloudy:
-                    CloudOverlay(nightMode: isNighttime(), cloudiness: .partial)
+                    if isNighttime() {
+                        PartlyCloudyNightView()
+                    } else {
+                        // Time of day variations for partly cloudy day
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            PartlyCloudyMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            PartlyCloudyEveningView()
+                        } else {
+                            // Regular daytime
+                            PartlyCloudyDayView()
+                        }
+                    }
                 case .cloudy:
                     CloudOverlay(nightMode: isNighttime())
                 case .rainy:
@@ -538,15 +553,20 @@ struct SportsTrackerView: View {
                     ModernFogOverlay(nightMode: isNighttime())
                 case .windy:
                     WindyOverlay(nightMode: isNighttime())
-                default:
-                    EmptyView()
+                case .unknown:
+                    // Show a default clear animation instead of empty view to preserve visual continuity
+                    ClearDayView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .opacity(0.9)
-            .blendMode(.screen)
+            .opacity(1.0) // Full opacity for better visibility
+            .blendMode(.normal) // Use normal blend mode for better visibility, especially at night
+            // Use stable ID based on condition to preserve animation state across updates
+            // Only changes when condition actually changes, not on every temperature update
+            .id("weather-animation-\(weatherCondition.rawValue)")
+            .allowsHitTesting(false) // Allow touches to pass through to content
             
-            // Content - enhanced with location and forecast
+            // Content - enhanced with location and forecast (placed on top of animation)
             VStack(spacing: 12) {
                 // Main weather info
                 weatherHeader()
@@ -560,6 +580,8 @@ struct SportsTrackerView: View {
                     .padding(.bottom, 10)
             }
             .padding(.vertical, 15)
+            .background(Color.clear) // Transparent background so animation shows through
+            .zIndex(1) // Ensure content is above animation
         }
         .frame(height: 235)
         .cornerRadius(22)
@@ -681,24 +703,21 @@ struct SportsTrackerView: View {
                 ModernRainOverlay(intensity: .medium, nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .stormy:
-                StormOverlay()
+                LightningView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .snowy:
-                SnowOverlay()
+                SnowfallView(nightMode: isNighttime())
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .foggy:
-                FogOverlay()
+                CloudOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .cloudy:
-                CloudOverlay()
+                CloudOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .partlyCloudy:
                 if isNight {
-                    ZStack(alignment: .top) {
-                        StarryNightOverlay()
-                        CloudOverlay(cloudiness: .partial)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    PartlyCloudyNightView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     // Time of day variations
                     let hour = Calendar.current.component(.hour, from: Date())
@@ -712,11 +731,8 @@ struct SportsTrackerView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
                         // Regular daytime
-                        ZStack(alignment: .top) {
-                            SunRaysView(showSun: false)
-                            CloudOverlay(cloudiness: .partial)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        PartlyCloudyDayView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                 }
             case .clear:
@@ -741,7 +757,7 @@ struct SportsTrackerView: View {
                     }
                 }
             case .windy:
-                WindyWeatherView()
+                WindyOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .unknown:
                 // For unknown weather, just show a clear day/night based on time

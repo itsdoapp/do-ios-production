@@ -196,3 +196,4 @@ if let power = metrics.runningPower {
 - Zone alerts are non-intrusive and auto-dismiss
 - All services are `@MainActor` for thread safety
 
+

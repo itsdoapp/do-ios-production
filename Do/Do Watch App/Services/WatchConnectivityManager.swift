@@ -28,69 +28,9 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             return
         }
         
-        print("🔧 [WatchConnectivityManager] Setting up session...")
         session = WCSession.default
-        
-        // CRITICAL: Set delegate BEFORE checking state or activating
-        print("🔧 [WatchConnectivityManager] Setting delegate...")
         session?.delegate = self
-        print("🔧 [WatchConnectivityManager] Delegate set: \(session?.delegate != nil)")
-        print("🔧 [WatchConnectivityManager] Delegate is self: \(session?.delegate === self)")
-        
-        let currentState = session?.activationState ?? .notActivated
-        print("🔧 [WatchConnectivityManager] Current activation state: \(currentState.rawValue)")
-        
-        #if targetEnvironment(simulator)
-        print("📱 [WatchConnectivityManager] Running on simulator")
-        print("📱 [WatchConnectivityManager] isPaired: N/A on watchOS")
-        print("📱 [WatchConnectivityManager] isWatchAppInstalled: N/A on watchOS")
-        #else
-        print("⌚️ [WatchConnectivityManager] Running on real device")
-        #endif
-        
-        if currentState == .notActivated {
-            print("🔄 [WatchConnectivityManager] Calling session.activate()...")
-            // Activate on main thread to ensure delegate callbacks work
-            DispatchQueue.main.async {
-                self.session?.activate()
-                print("🔄 [WatchConnectivityManager] session.activate() called on main thread, waiting for callback...")
-            }
-            
-            // Set up a timer to check activation state periodically as a fallback
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.checkActivationState()
-            }
-        } else {
-            print("ℹ️ [WatchConnectivityManager] Session already in state: \(currentState.rawValue)")
-            if currentState == .activated {
-                DispatchQueue.main.async {
-                    self.isActivated = true
-                    self.isReachable = self.session?.isReachable ?? false
-                    print("✅ [WatchConnectivityManager] Session already activated, setting isActivated = true")
-                }
-            }
-        }
-    }
-    
-    private func checkActivationState() {
-        guard let session = session else { return }
-        let state = session.activationState
-        print("🔍 [WatchConnectivityManager] Checking activation state: \(state.rawValue)")
-        
-        if state == .activated && !isActivated {
-            print("✅ [WatchConnectivityManager] Session is activated but isActivated was false, updating...")
-            DispatchQueue.main.async {
-                self.isActivated = true
-                self.isReachable = session.isReachable
-                print("✅ [WatchConnectivityManager] Updated isActivated = true, isReachable = \(self.isReachable)")
-            }
-        } else if state != .activated {
-            print("⏳ [WatchConnectivityManager] Still not activated, state: \(state.rawValue)")
-            // Check again in 1 second
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.checkActivationState()
-            }
-        }
+        session?.activate()
     }
     
     // MARK: - Message Sending
@@ -151,36 +91,6 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         }
     }
     
-    /// Request active workout from phone
-    func requestActiveWorkoutFromPhone(completion: @escaping ([String: Any]?) -> Void) {
-        let message: [String: Any] = [
-            "type": "requestActivePhoneWorkout",
-            "timestamp": Date().timeIntervalSince1970
-        ]
-        
-        sendMessage(message) { response in
-            if let workoutActive = response["workoutActive"] as? Bool, workoutActive {
-                // Phone has an active workout
-                var workoutData: [String: Any] = [:]
-                workoutData["workoutActive"] = true
-                workoutData["workoutType"] = response["workoutType"] as? String
-                workoutData["state"] = response["state"] ?? response["runState"] ?? response["walkState"]
-                workoutData["elapsedTime"] = response["elapsedTime"]
-                workoutData["metrics"] = response["metrics"] as? [String: Any]
-                workoutData["isWatchTracking"] = response["isWatchTracking"] as? Bool ?? false
-                if let user = response["user"] as? [String: Any] {
-                    workoutData["user"] = user
-                }
-                completion(workoutData)
-            } else {
-                completion(nil)
-            }
-        } errorHandler: { error in
-            print("❌ [WatchConnectivityManager] Error requesting phone workout: \(error.localizedDescription)")
-            completion(nil)
-        }
-    }
-    
     // MARK: - Metrics Sync
     
     func sendMetrics(_ metrics: [String: Any], workoutType: String) {
@@ -191,9 +101,6 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             "timestamp": Date().timeIntervalSince1970
         ]
         
-        // Test logging
-        TrackingTestLogger.shared.logSyncEvent(category: workoutType.uppercased(), direction: "watchToPhone", data: message)
-        
         sendMessage(message)
     }
 }
@@ -202,21 +109,14 @@ class WatchConnectivityManager: NSObject, ObservableObject {
 
 extension WatchConnectivityManager: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
-        print("🎯 [WatchConnectivityManager] activationDidCompleteWith called!")
-        print("🎯 [WatchConnectivityManager] Activation state: \(activationState.rawValue)")
-        print("🎯 [WatchConnectivityManager] Error: \(error?.localizedDescription ?? "none")")
-        print("🎯 [WatchConnectivityManager] Session isReachable: \(session.isReachable)")
-        
         DispatchQueue.main.async {
             if let error = error {
                 print("❌ [WatchConnectivityManager] Session activation failed: \(error.localizedDescription)")
                 self.isActivated = false
             } else {
-                print("✅ [WatchConnectivityManager] Session activated successfully!")
-                print("✅ [WatchConnectivityManager] Setting isActivated = true")
+                print("✅ [WatchConnectivityManager] Session activated with state: \(activationState.rawValue)")
                 self.isActivated = true
                 self.isReachable = session.isReachable
-                print("✅ [WatchConnectivityManager] isActivated: \(self.isActivated), isReachable: \(self.isReachable)")
             }
         }
     }
@@ -233,12 +133,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
             print("📨 [WatchConnectivityManager] Received message: \(message.keys.joined(separator: ", "))")
             self.receivedMessages = message
             
-            // Test logging
-            if let type = message["type"] as? String {
-                let workoutType = message["workoutType"] as? String ?? type
-                TrackingTestLogger.shared.logSyncEvent(category: workoutType.uppercased(), direction: "phoneToWatch", data: message)
-            }
-            
             // Handle different message types
             if let type = message["type"] as? String {
                 switch type {
@@ -246,6 +140,9 @@ extension WatchConnectivityManager: WCSessionDelegate {
                     self.handleWorkoutHandoff(message)
                 case "workoutMetrics":
                     self.handleWorkoutMetrics(message)
+                case "workoutUpdate":
+                    // Phone is sending workout update with coordination flags
+                    self.handleWorkoutUpdate(message)
                 case "gymWorkoutState", "gymWorkoutStart", "gymWorkoutPause", "gymWorkoutStop":
                     self.handleGymWorkoutMessage(message)
                 case "gymSetCompleted":
@@ -260,10 +157,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
                         object: nil,
                         userInfo: message
                     )
-                case "unitPreferences":
-                    if let useMetric = message["useMetric"] as? Bool {
-                        WatchSettingsManager.shared.updateUnitPreferences(useMetric: useMetric)
-                    }
                 default:
                     break
                 }
@@ -275,27 +168,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
         DispatchQueue.main.async {
             print("📨 [WatchConnectivityManager] Received message with reply handler")
             
-            // Handle specific workout type requests (e.g., "requestActiveRunningWorkout")
-            if let type = message["type"] as? String {
-                if type.hasPrefix("requestActive") && type.hasSuffix("Workout") {
-                    // Check if we have an active workout
-                    if let activeWorkout = WatchWorkoutCoordinator.shared.activeWorkout {
-                        var response = activeWorkout.toDictionary()
-                        response["hasActiveWorkout"] = true
-                        response["status"] = "received"
-                        replyHandler(response)
-                    } else {
-                        replyHandler([
-                            "hasActiveWorkout": false,
-                            "status": "received",
-                            "type": type
-                        ])
-                    }
-                    return
-                }
-            }
-            
-            // Handle generic requests
             if let request = message["request"] as? String {
                 switch request {
                 case "activeWorkout":
@@ -321,24 +193,18 @@ extension WatchConnectivityManager: WCSessionDelegate {
         DispatchQueue.main.async {
             print("📦 [WatchConnectivityManager] Received application context: \(applicationContext.keys.joined(separator: ", "))")
             
-            // Test logging
-            if let type = applicationContext["type"] as? String {
-                let workoutType = applicationContext["workoutType"] as? String ?? type
-                TrackingTestLogger.shared.logSyncEvent(category: workoutType.uppercased(), direction: "phoneToWatch", data: applicationContext)
-            }
-            
             if let type = applicationContext["type"] as? String {
                 switch type {
                 case "workoutHandoff":
                     self.handleWorkoutHandoff(applicationContext)
                 case "workoutMetrics":
                     self.handleWorkoutMetrics(applicationContext)
-                case "workoutUpdate":
-                    // Handle workout updates from phone - notify WorkoutListView
-                    self.handleWorkoutUpdate(applicationContext)
                 case "authTokens":
-                    // Forward to WatchAuthService (it will handle token storage and notification)
-                    WatchAuthService.shared.handleApplicationContext(applicationContext)
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("WatchAuthStateChanged"),
+                        object: nil,
+                        userInfo: applicationContext
+                    )
                 default:
                     break
                 }
@@ -361,32 +227,53 @@ extension WatchConnectivityManager: WCSessionDelegate {
     
     private func handleWorkoutMetrics(_ message: [String: Any]) {
         if let metrics = message["metrics"] as? [String: Any] {
-            NotificationCenter.default.post(
-                name: NSNotification.Name("WorkoutMetricsUpdate"),
-                object: nil,
-                userInfo: metrics
-            )
+            // Merge with watch metrics using best value logic
+            let coordinationFlags = [
+                "isPrimaryForDistance": message["isPrimaryForDistance"] as? Bool ?? false,
+                "isPrimaryForPace": message["isPrimaryForPace"] as? Bool ?? false,
+                "isPrimaryForHeartRate": message["isPrimaryForHeartRate"] as? Bool ?? false,
+                "isPrimaryForCalories": message["isPrimaryForCalories"] as? Bool ?? false,
+                "isPrimaryForCadence": message["isPrimaryForCadence"] as? Bool ?? false
+            ]
+            
+            if let mergedMetrics = MetricsHandoffService.shared.receiveMetricsFromPhone(metrics, coordinationFlags: coordinationFlags) {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("WorkoutMetricsUpdate"),
+                    object: nil,
+                    userInfo: mergedMetrics.toDictionary()
+                )
+            }
         }
     }
     
     private func handleWorkoutUpdate(_ message: [String: Any]) {
-        // Check if this is an active workout update
-        if let workoutActive = message["workoutActive"] as? Bool, workoutActive {
-            // Post notification for WorkoutListView to update phoneWorkout state
-            NotificationCenter.default.post(
-                name: NSNotification.Name("PhoneWorkoutUpdate"),
-                object: nil,
-                userInfo: message
-            )
-            print("📱 [WatchConnectivityManager] Posted PhoneWorkoutUpdate notification with workoutActive: true")
-        } else {
-            // Workout is not active, clear it
-            NotificationCenter.default.post(
-                name: NSNotification.Name("PhoneWorkoutUpdate"),
-                object: nil,
-                userInfo: ["workoutActive": false]
-            )
-            print("📱 [WatchConnectivityManager] Posted PhoneWorkoutUpdate notification with workoutActive: false")
+        // Handle workoutUpdate messages from phone (includes coordination flags)
+        if let metrics = message["metrics"] as? [String: Any] {
+            // Extract coordination flags from message
+            let coordinationFlags: [String: Any] = [
+                "isPrimaryForDistance": message["isPrimaryForDistance"] as? Bool ?? false,
+                "isPrimaryForPace": message["isPrimaryForPace"] as? Bool ?? false,
+                "isPrimaryForHeartRate": message["isPrimaryForHeartRate"] as? Bool ?? false,
+                "isPrimaryForCalories": message["isPrimaryForCalories"] as? Bool ?? false,
+                "isPrimaryForCadence": message["isPrimaryForCadence"] as? Bool ?? false
+            ]
+            
+            // Merge phone metrics with watch metrics using best value logic
+            if let mergedMetrics = MetricsHandoffService.shared.receiveMetricsFromPhone(metrics, coordinationFlags: coordinationFlags) {
+                // Update watch workout with merged metrics
+                if var workout = WatchWorkoutCoordinator.shared.activeWorkout {
+                    workout.metrics = mergedMetrics
+                    workout.lastUpdateDate = Date()
+                    WatchWorkoutCoordinator.shared.activeWorkout = workout
+                }
+                
+                // Notify views of updated metrics
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("WorkoutMetricsUpdate"),
+                    object: nil,
+                    userInfo: mergedMetrics.toDictionary()
+                )
+            }
         }
     }
     

@@ -113,6 +113,10 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
     // Prevent duplicate prompts
     private var didShowJoinPromptFromWatch: Bool = false
     
+    // Route loading cache
+    private var lastRouteLoadTime: Date?
+    private var lastRouteLoadLocation: CLLocation?
+    
     // Walking type
     // MARK: - UI Outlets
     private var mapView: MKMapView!
@@ -272,15 +276,85 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
         // Observe location authorization changes
         observeLocationAuthorization()
         
-        // Fetch initial weather data and routes
-        Task {
-            await loadWeatherData()
-            await fetchRoutes()
-            await loadWalkingHistory()
-        }
-        
         // Listen for partial route updates from background tail processing
         NotificationCenter.default.addObserver(self, selector: #selector(didUpdateNearbyTrails(_:)), name: .didUpdateNearbyTrails, object: nil)
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        // End initial load timer immediately - view is now visible
+        PerformanceLogger.end("Track:initialLoad", extra: "view appeared")
+        
+        // Check and update hosting controller
+        if let hostingView = hostingController?.view {
+            // Find and configure scroll views
+            findAndConfigureScrollViews(in: hostingView)
+        }
+        
+        // Check for active watch workouts when the view appears
+        print("📱 DIAGNOSTIC: ViewDidAppear called, checking for watch workouts...")
+        checkForActiveWatchWorkouts()
+        
+        // Start periodic watch sync loop
+        startWatchSync()
+        
+        // Show cached data immediately if available
+        showCachedDataIfAvailable()
+        
+        // Load fresh data in background (non-blocking)
+        if !hasLoadedInitialData {
+            Task {
+                // Load weather and routes in parallel for faster loading
+                async let weatherTask = loadWeatherData()
+                async let routesTask = fetchRoutes()
+                
+                // Wait for weather and routes (critical for UI)
+                await weatherTask
+                await routesTask
+                
+                // Stop location updates now that we have what we need
+                ModernLocationManager.shared.stopLocation(for: .routeDisplay)
+                
+                // Load history in background (non-critical, can be deferred)
+                Task.detached(priority: .utility) {
+                    await MainActor.run {
+                        self.loadWalkingHistory()
+                    }
+                }
+            }
+            hasLoadedInitialData = true
+        }
+    }
+    
+    private var hasLoadedInitialData = false
+    
+    /// Show cached weather and routes data immediately if available
+    private func showCachedDataIfAvailable() {
+        // Show cached weather if available and still valid
+        if let cachedWeather = weatherService.currentWeather,
+           let lastLocation = weatherService.lastLocation,
+           let lastFetchTime = weatherService.lastWeatherFetchTime,
+           Date().timeIntervalSince(lastFetchTime) < 3600, // Less than 1 hour old
+           let currentLocation = locationManager.location,
+           currentLocation.distance(from: lastLocation) < 1000 { // Within 1km
+            print("📦 Showing cached weather data immediately")
+            weatherCondition = cachedWeather.condition
+            temperature = cachedWeather.temperature
+            humidity = cachedWeather.humidity
+            windSpeed = cachedWeather.windSpeed
+            let isNight = Calendar.current.component(.hour, from: Date()) < 6 || Calendar.current.component(.hour, from: Date()) > 18
+            weatherIconName = getWeatherIcon(for: cachedWeather.condition, isNight: isNight)
+            forecastDescription = generateForecastDescription(cachedWeather)
+            weatherDataLoaded = true
+        }
+        
+        // Show cached routes if available
+        if !RoutePlanner.shared.nearbyTrails.isEmpty {
+            print("📦 Showing \(RoutePlanner.shared.nearbyTrails.count) cached routes")
+            hasLoadedRoutes = true
+            routesForceRefreshID = UUID()
+        }
     }
     
     @objc private func didUpdateNearbyTrails(_ note: Notification) {
@@ -339,15 +413,28 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
         }
     }
     
-    @MainActor
     func fetchRoutes(forceRefresh: Bool = false) {
         let routePlanner = RoutePlanner.shared
         
-        // Skip if we already have routes and aren't forcing refresh
+        // Always fetch fresh routes when switching categories or if force refresh is requested
+        // Don't skip if we have routes - they might be from a different category
         if !forceRefresh && !routePlanner.nearbyTrails.isEmpty {
-            print("✓ Using cached routes - \(routePlanner.nearbyTrails.count) routes available")
-            hasLoadedRoutes = true
-            return
+            // Check if routes are recent (less than 5 minutes old) and location hasn't changed much
+            // If so, we can use cached routes, otherwise fetch fresh ones
+            if let lastLoadTime = lastRouteLoadTime,
+               Date().timeIntervalSince(lastLoadTime) < 300, // Less than 5 minutes
+               let currentLocation = locationManager.location {
+                // Check if location hasn't changed significantly (within 500m)
+                if let cachedLocation = lastRouteLoadLocation,
+                   currentLocation.distance(from: cachedLocation) < 500 {
+                    print("✓ Using cached routes - \(routePlanner.nearbyTrails.count) routes available (recent & same location)")
+                    hasLoadedRoutes = true
+                    return
+                }
+            }
+            // Routes exist but are stale or location changed - clear and fetch fresh
+            print("🔄 Routes exist but are stale or location changed - fetching fresh routes")
+            routePlanner.clearTrails()
         }
         
         print("🔄 Fetching routes...")
@@ -357,7 +444,7 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
             print("🔄 Force refreshing routes")
             
             // Clear existing routes to ensure UI refresh
-            routePlanner.nearbyTrails = []
+            routePlanner.clearTrails()
             
             // Send change notifications
             objectWillChange.send()
@@ -372,14 +459,18 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
         
         // Now fetch the routes (this uses a cached location if one isn't available)
         Task {
-            // Use the proper find method that exists in RoutePlanner
-            routePlanner.findRunningTrails { [weak self] success in
+            // Use the walking-specific find method
+            routePlanner.findWalkingTrails(radius: 3000) { [weak self] success in
                 guard let self = self else { return }
                 
                 // Update UI on main thread
                 DispatchQueue.main.async {
                     // Mark routes as loaded first
                     self.hasLoadedRoutes = true
+                    
+                    // Update cache timestamp and location
+                    self.lastRouteLoadTime = Date()
+                    self.lastRouteLoadLocation = self.locationManager.location
                     
                     // Force refresh IDs to ensure SwiftUI updates
                     self.routesForceRefreshID = UUID()
@@ -518,7 +609,8 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
             ModernLocationManager.shared.ensurePreciseAccuracyIfNeeded()
             return
         case .notDetermined:
-            locationManager.requestWhenInUseAuthorization()
+            print("📱 Requesting location authorization...")
+            locationManager.manager.requestWhenInUseAuthorization()
         case .denied, .restricted:
             print("❌ Location permission denied/restricted. Prompting user to open Settings…")
             if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -539,14 +631,29 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
                 print("📍 Location authorization changed: \(status.rawValue)")
                 
                 if status == .authorizedWhenInUse || status == .authorizedAlways {
-                    print("✅ Location granted! Requesting one-time location for weather/routes…")
+                    print("✅ Location granted! Loading weather/routes with cached location…")
                     
-                    // Request single location fix for initial data load
-                    ModernLocationManager.shared.requestLocation(for: .routeDisplay)
-                    // Reload routes and weather when location becomes available
-                    Task { @MainActor [weak self] in
-                        await self?.fetchRoutes()
-                        await self?.loadWeatherData()
+                    // Use cached location if available, otherwise request one-time location
+                    if let cachedLocation = self.locationManager.location,
+                       Date().timeIntervalSince(cachedLocation.timestamp) < 600 {
+                        print("📍 Using cached location (age: \(Int(Date().timeIntervalSince(cachedLocation.timestamp)))s)")
+                        Task { @MainActor [weak self] in
+                            await self?.fetchRoutes()
+                            await self?.loadWeatherData()
+                            // Stop location updates after loading
+                            ModernLocationManager.shared.stopLocation(for: .routeDisplay)
+                        }
+                    } else {
+                        print("📍 No cached location or stale - requesting one-time location…")
+                        // Request single location fix for initial data load
+                        ModernLocationManager.shared.requestLocation(for: .routeDisplay)
+                        // Reload routes and weather when location becomes available
+                        Task { @MainActor [weak self] in
+                            await self?.fetchRoutes()
+                            await self?.loadWeatherData()
+                            // Stop location updates after loading
+                            ModernLocationManager.shared.stopLocation(for: .routeDisplay)
+                        }
                     }
                 }
             }
@@ -571,24 +678,6 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
         // Stop watch sync when view disappears
         stopWatchSync()
     }
-    
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        
-        // Check and update hosting controller
-        if let hostingView = hostingController?.view {
-            // Find and configure scroll views
-            findAndConfigureScrollViews(in: hostingView)
-        }
-        
-        // Check for active watch workouts when the view appears
-        print("📱 DIAGNOSTIC: ViewDidAppear called, checking for watch workouts...")
-        checkForActiveWatchWorkouts()
-        
-        // Start periodic watch sync loop
-        startWatchSync()
-    }
-    
     
     /// Checks if there's an active workout on the watch and prepares data for the card UI
     private func checkForActiveWatchWorkouts() {
@@ -775,9 +864,13 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
     public func loadWeatherData() async {
         print("📱 ModernWalkingTrackerViewController: Starting weather data loading")
         
-        // Initialize weather state
+        // Initialize weather state - but preserve existing weather data to avoid losing animation
         await MainActor.run {
-            self.weatherDataLoaded = false
+            // Only reset weatherDataLoaded if we don't have any weather data yet
+            // This prevents the animation from disappearing when refreshing weather
+            if !self.weatherDataLoaded || self.weatherCondition == .unknown {
+                self.weatherDataLoaded = false
+            }
             self.forecastDescription = "Checking forecast..."
             
             // Set loading state but don't reset temperature to avoid flicker if we have data
@@ -835,9 +928,17 @@ class ModernWalkingTrackerViewController: UIViewController, ObservableObject, CL
                         self.forecastDescription = "Weather data unavailable"
                     }
                     
-                    // Show weather view with error message
+                    // Preserve existing weather condition if we have one, otherwise set to clear as fallback
+                    // This prevents the animation from disappearing on error
+                    if self.weatherCondition == .unknown {
+                        self.weatherCondition = .clear // Default to clear instead of unknown
+                    }
+                    
+                    // Show weather view with error message (preserve existing data)
                     self.weatherDataLoaded = true
-                    self.weatherIconName = "exclamationmark.triangle"
+                    if self.weatherIconName.isEmpty {
+                        self.weatherIconName = "exclamationmark.triangle"
+                    }
                 }
             }
         } else {
@@ -2089,6 +2190,69 @@ struct WalkingTrackerView: View {
             getRunStyleWeatherGradient()
                 .cornerRadius(22)
                 .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
+                
+            // Normal weather animation
+            ZStack(alignment: .top) {
+                switch viewModel.weatherCondition {
+                case .clear:
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        // Time of day variations based on actual hour
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            ClearMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            ClearEveningView()
+                        } else {
+                            // Regular daytime
+                            ClearDayView()
+                        }
+                    }
+                case .partlyCloudy:
+                    if isNighttime() {
+                        PartlyCloudyNightView()
+                    } else {
+                        // Time of day variations for partly cloudy day
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            PartlyCloudyMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            PartlyCloudyEveningView()
+                        } else {
+                            // Regular daytime
+                            PartlyCloudyDayView()
+                        }
+                    }
+                case .cloudy:
+                    CloudOverlay(nightMode: isNighttime())
+                case .rainy:
+                    ModernRainOverlay(intensity: .medium, nightMode: isNighttime())
+                case .stormy:
+                    LightningView()
+                case .snowy:
+                    SnowfallView(nightMode: isNighttime())
+                case .foggy:
+                    ModernFogOverlay(nightMode: isNighttime())
+                case .windy:
+                    WindyOverlay(nightMode: isNighttime())
+                case .unknown:
+                    // Show a default clear animation instead of empty view to preserve visual continuity
+                    ClearDayView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .opacity(1.0) // Full opacity for better visibility
+            .blendMode(.normal) // Use normal blend mode for better visibility, especially at night
+            // Use stable ID based on condition to preserve animation state across updates
+            // Only changes when condition actually changes, not on every temperature update
+            .id("weather-animation-\(viewModel.weatherCondition.rawValue)")
+            .allowsHitTesting(false) // Allow touches to pass through to content
+            
             VStack(spacing: 12) {
                 walkWeatherHeader()
                 walkWeatherContent()
@@ -2097,6 +2261,8 @@ struct WalkingTrackerView: View {
                     .padding(.bottom, 10)
             }
             .padding(.vertical, 15)
+            .background(Color.clear) // Transparent background so animation shows through
+            .zIndex(1) // Ensure content is above animation
         }
         .frame(height: 235)
         .cornerRadius(22)
@@ -2107,6 +2273,12 @@ struct WalkingTrackerView: View {
         let hour = Calendar.current.component(.hour, from: Date())
         let colors = Color.weatherGradient(for: viewModel.weatherCondition, hour: hour)
         return LinearGradient(gradient: Gradient(colors: [colors.0, colors.1]), startPoint: .top, endPoint: .bottom)
+    }
+    
+    // Helper function to determine if it's night time
+    private func isNighttime() -> Bool {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return hour < 6 || hour > 18
     }
     private func walkWeatherHeader() -> some View {
         VStack(spacing: 0) {

@@ -240,8 +240,8 @@ struct GymWorkoutView: View {
             sessionName = "Open Training"
         }
         
-        workoutCoordinator.startWorkout(type: .gym, isOpenTraining: isOpenTraining)
-        healthKitManager.startWorkout(type: .gym) // Gym workouts are always indoor
+        workoutCoordinator.startWorkout(type: WorkoutType.gym)
+        healthKitManager.startWorkout(type: WorkoutType.gym) // Gym workouts are always indoor
         isTracking = true
         startTimer()
         

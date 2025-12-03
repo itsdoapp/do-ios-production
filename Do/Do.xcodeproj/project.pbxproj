@@ -237,10 +237,6 @@
 		90F474442EDD5C3700CBB6F4 /* DailyBricksWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F474422EDD5C3700CBB6F4 /* DailyBricksWidgetBundle.swift */; };
 		90F474452EDD5C3700CBB6F4 /* DailyBricksWidgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F474432EDD5C3700CBB6F4 /* DailyBricksWidgetViews.swift */; };
 		90F474472EDD5D5100CBB6F4 /* DailyBricksModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F474462EDD5D5100CBB6F4 /* DailyBricksModels.swift */; };
-		90F4744C2EDE358100CBB6F4 /* TrackingTestLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F4744A2EDE358100CBB6F4 /* TrackingTestLogger.swift */; };
-		90F4744D2EDE358100CBB6F4 /* TrackingTestFramework.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F474492EDE358100CBB6F4 /* TrackingTestFramework.swift */; };
-		90F4744E2EDE358100CBB6F4 /* CategoryTestScenarios.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F474482EDE358100CBB6F4 /* CategoryTestScenarios.swift */; };
-		90F474502EDE3B0500CBB6F4 /* TrackingTestLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F4744F2EDE3B0500CBB6F4 /* TrackingTestLogger.swift */; };
 		90FBDDBB2EDA59070024AE4A /* WatchConnectivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CF1C682ED8896100D4E146 /* WatchConnectivityManager.swift */; };
 		90FBDDBC2EDA59240024AE4A /* WatchMetricsSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CF1C692ED8896100D4E146 /* WatchMetricsSyncService.swift */; };
 		90FBDDBD2EDA59360024AE4A /* WatchWorkoutCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CF1C6A2ED8896100D4E146 /* WatchWorkoutCoordinator.swift */; };
@@ -664,10 +660,6 @@
 		90F474422EDD5C3700CBB6F4 /* DailyBricksWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyBricksWidgetBundle.swift; sourceTree = "<group>"; };
 		90F474432EDD5C3700CBB6F4 /* DailyBricksWidgetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyBricksWidgetViews.swift; sourceTree = "<group>"; };
 		90F474462EDD5D5100CBB6F4 /* DailyBricksModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyBricksModels.swift; sourceTree = "<group>"; };
-		90F474482EDE358100CBB6F4 /* CategoryTestScenarios.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryTestScenarios.swift; sourceTree = "<group>"; };
-		90F474492EDE358100CBB6F4 /* TrackingTestFramework.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingTestFramework.swift; sourceTree = "<group>"; };
-		90F4744A2EDE358100CBB6F4 /* TrackingTestLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingTestLogger.swift; sourceTree = "<group>"; };
-		90F4744F2EDE3B0500CBB6F4 /* TrackingTestLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingTestLogger.swift; sourceTree = "<group>"; };
 		90F4B1F69DA027E0313038D7 /* CurrentUserService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentUserService.swift; sourceTree = "<group>"; };
 		90FBDDD12EDA5C1C0024AE4A /* AnalysisResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisResponse.swift; sourceTree = "<group>"; };
 		90FBDDD22EDA5C1C0024AE4A /* GenieAPIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GenieAPIModels.swift; sourceTree = "<group>"; };
@@ -868,7 +860,6 @@
 		17009CC658D77382AD8D59CD /* Track */ = {
 			isa = PBXGroup;
 			children = (
-				90F4744B2EDE358100CBB6F4 /* Testing */,
 				90892E672EDA75C200720834 /* Views */,
 				9013C8252EDA6CAB0077085B /* WatchApp */,
 				9013C81C2EDA6C550077085B /* Auth */,
@@ -1413,7 +1404,6 @@
 		90CF1C6D2ED8896100D4E146 /* Services */ = {
 			isa = PBXGroup;
 			children = (
-				90F4744F2EDE3B0500CBB6F4 /* TrackingTestLogger.swift */,
 				90F4743B2EDD4F1700CBB6F4 /* WatchLocationManager.swift */,
 				90F4742A2EDD3A9C00CBB6F4 /* ZoneAlertService.swift */,
 				90F4741E2EDD3A0E00CBB6F4 /* AdvancedWorkoutMetricsService.swift */,
@@ -1576,16 +1566,6 @@
 				90F4743D2EDD5BEC00CBB6F4 /* DailyBricksWidget.swift */,
 			);
 			path = Widgets;
-			sourceTree = "<group>";
-		};
-		90F4744B2EDE358100CBB6F4 /* Testing */ = {
-			isa = PBXGroup;
-			children = (
-				90F474482EDE358100CBB6F4 /* CategoryTestScenarios.swift */,
-				90F474492EDE358100CBB6F4 /* TrackingTestFramework.swift */,
-				90F4744A2EDE358100CBB6F4 /* TrackingTestLogger.swift */,
-			);
-			path = Testing;
 			sourceTree = "<group>";
 		};
 		9623FF742F48106DDDFD8759 /* Analysis */ = {
@@ -2322,9 +2302,6 @@
 				4374AE1BC590D02F29C78A2A /* ModernRunTrackerViewController.swift in Sources */,
 				3E9A5FCBF7EF55C4B2FB99E8 /* ModernSportsTrackerViewController.swift in Sources */,
 				90892E642EDA759800720834 /* LoudnessManager.swift in Sources */,
-				90F4744C2EDE358100CBB6F4 /* TrackingTestLogger.swift in Sources */,
-				90F4744D2EDE358100CBB6F4 /* TrackingTestFramework.swift in Sources */,
-				90F4744E2EDE358100CBB6F4 /* CategoryTestScenarios.swift in Sources */,
 				90892E652EDA759800720834 /* PermissionsManager.swift in Sources */,
 				1B94A718EA6C26DCDC02459B /* ModernSwimmingTrackerViewController.swift in Sources */,
 				13B148B76D60FC8106E8DF69 /* ModernWalkingTrackerViewController.swift in Sources */,
@@ -2495,7 +2472,6 @@
 				90FBDDC52EDA596B0024AE4A /* WorkoutState.swift in Sources */,
 				90F474062EDD1C1F00CBB6F4 /* ZoneManager.swift in Sources */,
 				90F4740A2EDD1D8B00CBB6F4 /* GenieService.swift in Sources */,
-				90F474502EDE3B0500CBB6F4 /* TrackingTestLogger.swift in Sources */,
 				90FBDDC62EDA596B0024AE4A /* WatchMetrics.swift in Sources */,
 				90FBDDC72EDA596B0024AE4A /* WatchWorkoutSession.swift in Sources */,
 				90FBDDC92EDA59870024AE4A /* WorkoutListView.swift in Sources */,
@@ -2662,7 +2638,6 @@
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Do;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2748,7 +2723,6 @@
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Do;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

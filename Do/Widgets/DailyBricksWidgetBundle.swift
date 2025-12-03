@@ -17,3 +17,4 @@ struct DailyBricksWidgetBundle: WidgetBundle {
     }
 }
 
+

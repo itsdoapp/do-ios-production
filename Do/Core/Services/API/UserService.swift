@@ -38,23 +38,38 @@ class UserService {
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Add Cognito authentication token
-        if let idToken = AWSCognitoAuth.shared.getIdToken() {
+        // Add Cognito authentication token - use KeychainManager directly like AuthService does
+        let keychainManager = KeychainManager.shared
+        if let idToken = keychainManager.get(Constants.Keychain.idToken) {
             urlRequest.setValue("Bearer \(idToken)", forHTTPHeaderField: "Authorization")
             print("🔐 [UserService] Added Authorization header for user creation")
         } else {
-            print("⚠️ [UserService] No ID token available for user creation - request may fail with 403")
+            // Try AWSCognitoAuth as fallback
+            if let idToken = AWSCognitoAuth.shared.getIdToken() {
+                urlRequest.setValue("Bearer \(idToken)", forHTTPHeaderField: "Authorization")
+                print("🔐 [UserService] Added Authorization header from AWSCognitoAuth fallback")
+            } else {
+                print("⚠️ [UserService] No ID token available for user creation - request may fail with 403")
+                throw APIError.unauthorized
+            }
         }
         
         urlRequest.httpBody = try JSONEncoder().encode(request)
         
+        print("📤 [UserService] Sending create user request to: \(createUserUrl)")
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.noData
         }
         
+        print("📥 [UserService] Received response with status code: \(httpResponse.statusCode)")
+        
         guard (200...299).contains(httpResponse.statusCode) else {
+            // Log response body for debugging
+            if let responseBody = String(data: data, encoding: .utf8) {
+                print("❌ [UserService] Server error response: \(responseBody)")
+            }
             throw APIError.serverError(httpResponse.statusCode)
         }
         

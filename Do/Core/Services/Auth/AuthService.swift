@@ -5,7 +5,6 @@
 
 import Foundation
 import Combine
-import UIKit
 
 enum AuthError: Error {
     case invalidCredentials
@@ -134,10 +133,6 @@ class AuthService: ObservableObject {
                     print("🔐 [AuthService] Synced user to CurrentUserService")
                 }
                 
-                // Sync tokens to Apple Watch
-                print("🔐 [AuthService] Syncing tokens to Apple Watch...")
-                CrossDeviceAuthManager.shared.syncTokensToWatch()
-                
                 print("🔐 [AuthService] Posting AuthStateChanged notification")
                 NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
                 print("🔐 [AuthService] Sign in complete!")
@@ -218,18 +213,10 @@ class AuthService: ObservableObject {
         let userId = try decodeUserId(from: tokens.idToken)
         _ = keychainManager.save(userId, forKey: Constants.Keychain.userId)
         
-        // Save to UserDefaults for compatibility
-        UserDefaults.standard.set(userId, forKey: "cognito_user_id")
-        UserDefaults.standard.set(userId, forKey: "userId")
-        
         await fetchCurrentUser(userId: userId)
         
         await MainActor.run {
             isAuthenticated = true
-            
-            // Sync tokens to Apple Watch
-            CrossDeviceAuthManager.shared.syncTokensToWatch()
-            
             NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
         }
     }
@@ -251,18 +238,10 @@ class AuthService: ObservableObject {
         let userId = try decodeUserId(from: tokens.idToken)
         _ = keychainManager.save(userId, forKey: Constants.Keychain.userId)
         
-        // Save to UserDefaults for compatibility
-        UserDefaults.standard.set(userId, forKey: "cognito_user_id")
-        UserDefaults.standard.set(userId, forKey: "userId")
-        
         await fetchCurrentUser(userId: userId)
         
         await MainActor.run {
             isAuthenticated = true
-            
-            // Sync tokens to Apple Watch
-            CrossDeviceAuthManager.shared.syncTokensToWatch()
-            
             NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
         }
     }
@@ -287,10 +266,6 @@ class AuthService: ObservableObject {
         currentUser = nil
         isAuthenticated = false
         CurrentUserService.shared.clearUser()
-        
-        // Sync logout to Apple Watch
-        print("🔐 [AuthService] Syncing logout to Apple Watch...")
-        CrossDeviceAuthManager.shared.logout()
         
         // Notify
         NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
@@ -330,12 +305,37 @@ class AuthService: ObservableObject {
         do {
             // Lambda will handle cognitoSub lookup automatically
             let user = try await UserService.shared.getUser(userId: userId)
-            await syncCurrentUserState(with: user)
+            await MainActor.run {
+                self.currentUser = user
+                
+                // Save to UserDefaults for quick access on next launch
+                UserDefaults.standard.set(user.username, forKey: "username")
+                UserDefaults.standard.set(user.email, forKey: "email")
+                UserDefaults.standard.set(user.name, forKey: "name")
+                
+                // Sync to CurrentUserService for legacy code
+                var legacyUser = UserModel()
+                legacyUser.userID = user.id
+                legacyUser.userName = user.username
+                legacyUser.email = user.email
+                legacyUser.name = user.name
+                legacyUser.profilePictureUrl = user.profilePictureUrl
+                CurrentUserService.shared.updateUser(legacyUser)
+                print("✅ [AuthService] Synced user to CurrentUserService: \(user.username)")
+            }
             print("✅ [AuthService] User profile loaded")
+        } catch let error as APIError {
+            // Check if it's a 404 (user not found) before trying to create
+            if case .serverError(let statusCode) = error, statusCode == 404 {
+                print("⚠️ [AuthService] User profile not found (404), creating...")
+                await createUserProfile(userId: userId)
+            } else {
+                print("⚠️ [AuthService] Error fetching user profile: \(error) - not a 404, skipping creation")
+                // Don't try to create if it's not a 404 - user might already exist
+            }
         } catch {
-            // If user doesn't exist (404), create it
-            print("⚠️ [AuthService] User profile not found, creating...")
-            await createUserProfile(userId: userId)
+            print("⚠️ [AuthService] Unexpected error fetching user profile: \(error)")
+            // Only try to create if we're sure it's a "not found" scenario
         }
     }
     
@@ -361,8 +361,40 @@ class AuthService: ObservableObject {
                 name: name
             )
             
-            await syncCurrentUserState(with: user)
+            await MainActor.run {
+                self.currentUser = user
+                
+                // Save to UserDefaults for quick access on next launch
+                UserDefaults.standard.set(user.username, forKey: "username")
+                UserDefaults.standard.set(user.email, forKey: "email")
+                UserDefaults.standard.set(user.name, forKey: "name")
+                
+                // Sync to CurrentUserService for legacy code
+                var legacyUser = UserModel()
+                legacyUser.userID = user.id
+                legacyUser.userName = user.username
+                legacyUser.email = user.email
+                legacyUser.name = user.name
+                legacyUser.profilePictureUrl = user.profilePictureUrl
+                CurrentUserService.shared.updateUser(legacyUser)
+                print("✅ [AuthService] Synced new user to CurrentUserService: \(user.username)")
+            }
             print("✅ [AuthService] User profile created successfully")
+        } catch let error as APIError {
+            // Handle specific error cases
+            if case .serverError(let statusCode) = error {
+                if statusCode == 403 {
+                    print("⚠️ [AuthService] User creation failed with 403 - user may already exist or token invalid")
+                    print("⚠️ [AuthService] Attempting to fetch user profile again...")
+                    // Try fetching again - user might have been created by another process
+                    await fetchOrCreateUserProfile(userId: userId)
+                } else {
+                    print("❌ [AuthService] Failed to create user profile: serverError(\(statusCode))")
+                }
+            } else {
+                print("❌ [AuthService] Failed to create user profile: \(error)")
+            }
+            // Don't fail auth if profile creation fails
         } catch {
             print("❌ [AuthService] Failed to create user profile: \(error)")
             // Don't fail auth if profile creation fails
@@ -392,7 +424,19 @@ class AuthService: ObservableObject {
     private func fetchCurrentUser(userId: String) async {
         do {
             let user = try await UserService.shared.getUser(userId: userId)
-            await syncCurrentUserState(with: user)
+            await MainActor.run {
+                self.currentUser = user
+                
+                // Sync to CurrentUserService for legacy code
+                var legacyUser = UserModel()
+                legacyUser.userID = user.id
+                legacyUser.userName = user.username
+                legacyUser.email = user.email
+                legacyUser.name = user.name
+                legacyUser.profilePictureUrl = user.profilePictureUrl
+                CurrentUserService.shared.updateUser(legacyUser)
+                print("✅ [AuthService] Synced user to CurrentUserService")
+            }
         } catch {
             await MainActor.run {
                 self.isAuthenticated = false
@@ -400,48 +444,6 @@ class AuthService: ObservableObject {
                 CurrentUserService.shared.clearUser()
             }
         }
-    }
-    
-    private func syncCurrentUserState(with user: User, persistToDefaults: Bool = true) async {
-        let legacyUser = await buildLegacyUser(from: user)
-        self.currentUser = user
-        
-        if persistToDefaults {
-            UserDefaults.standard.set(user.username, forKey: "username")
-            UserDefaults.standard.set(user.email, forKey: "email")
-            UserDefaults.standard.set(user.name, forKey: "name")
-        }
-        
-        CurrentUserService.shared.updateUser(legacyUser)
-        print("✅ [AuthService] Synced user to CurrentUserService: \(user.username)")
-    }
-    
-    private func buildLegacyUser(from user: User) async -> UserModel {
-        await Task.detached(priority: .utility) { () -> UserModel in
-            var legacyUser = UserModel()
-            legacyUser.userID = user.id
-            legacyUser.userName = user.username
-            legacyUser.email = user.email
-            legacyUser.name = user.name
-            legacyUser.profilePictureUrl = user.profilePictureUrl
-            legacyUser.privacyToggle = user.privacyToggle
-            legacyUser.followerCount = user.followerCount
-            legacyUser.followingCount = user.followingCount
-            
-            if let profilePicUrl = user.profilePictureUrl,
-               let url = URL(string: profilePicUrl) {
-                do {
-                    let (data, _) = try await URLSession.shared.data(from: url)
-                    if let image = UIImage(data: data) {
-                        legacyUser.profilePicture = image
-                    }
-                } catch {
-                    print("❌ [AuthService] Failed to load profile picture: \(error.localizedDescription)")
-                }
-            }
-            
-            return legacyUser
-        }.value
     }
     
     private func decodeUserId(from idToken: String) throws -> String {

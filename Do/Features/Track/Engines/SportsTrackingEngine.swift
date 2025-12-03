@@ -99,12 +99,7 @@ class SportsTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
     static let shared = SportsTrackingEngine()
     
     // MARK: - Published Properties
-    @Published var state: SportsTrackingState = .notStarted {
-        didSet {
-            // Test logging
-            TrackingTestLogger.shared.logStateChange(category: "SPORTS", oldState: oldValue.rawValue, newState: state.rawValue)
-        }
-    }
+    @Published var state: SportsTrackingState = .notStarted
     @Published var sportType: SportType = .basketball
     @Published var isTracking = false
     @Published var isPaused = false
@@ -309,8 +304,8 @@ class SportsTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             self.totalPausedDuration = 0
             self.pausedTime = 0
             
-            // Request location permissions for workout tracking (needs "Always" for background)
-            ModernLocationManager.shared.requestWorkoutLocationAuthorization()
+            // Request location permissions
+            self.locationManager?.requestAlwaysAuthorization()
             
             // Start location updates
             let authStatus = CLLocationManager.authorizationStatus()
@@ -1194,10 +1189,6 @@ extension SportsTrackingEngine: CLLocationManagerDelegate {
                 isPrimaryForHeartRate = false // Watch still better for HR
                 isPrimaryForCalories = true   // Phone can calculate calories with distance
                 isPrimaryForCadence = false   // Watch better for cadence
-                
-                // Test logging
-                TrackingTestLogger.shared.logCoordination(category: "SPORTS", metric: "distance", primaryDevice: "phone", reason: "GPS-based outdoor tracking")
-                TrackingTestLogger.shared.logCoordination(category: "SPORTS", metric: "heartRate", primaryDevice: "watch", reason: "Watch has better HR sensors")
                 
                 print("📱 Outdoor sports with good GPS: Phone primary for distance/pace")
                 print("⌚️ Watch primary for heart rate and cadence")

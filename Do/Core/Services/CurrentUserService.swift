@@ -38,25 +38,6 @@ class CurrentUserService: ObservableObject {
     
     /// Flag to trigger profile refresh (e.g. after posting)
     var shouldRefreshCurrentUserProfile: Bool = false
-    
-    /// Build a lightweight payload for watch/phone communication
-    func userSyncPayload() -> [String: Any]? {
-        let currentUser = user
-        let hasId = !(currentUser.userID ?? "").isEmpty
-        let hasUsername = !(currentUser.userName ?? "").isEmpty
-        
-        guard hasId || hasUsername else {
-            return nil
-        }
-        
-        var payload: [String: Any] = [:]
-        if let id = currentUser.userID { payload["userId"] = id }
-        if let username = currentUser.userName { payload["userName"] = username }
-        if let name = currentUser.name { payload["name"] = name }
-        if let email = currentUser.email { payload["email"] = email }
-        if let profileUrl = currentUser.profilePictureUrl { payload["profilePictureUrl"] = profileUrl }
-        return payload
-    }
 }
 
 

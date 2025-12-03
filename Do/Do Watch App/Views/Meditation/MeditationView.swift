@@ -156,8 +156,8 @@ struct MeditationView: View {
     
     private func actuallyStartWorkout() {
         workoutStartTime = Date()
-        workoutCoordinator.startWorkout(type: .meditation)
-        healthKitManager.startWorkout(type: .meditation)
+        workoutCoordinator.startWorkout(type: WorkoutType.meditation)
+        healthKitManager.startWorkout(type: WorkoutType.meditation)
         isRunning = true
         startTimer()
         startBreathingAnimation()

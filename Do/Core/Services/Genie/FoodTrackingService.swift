@@ -74,12 +74,6 @@ class FoodTrackingService: ObservableObject {
             data: entry.toDictionary()
         )
         
-        // Sync to AppGroup for watch fuel category
-        syncFoodToAppGroup()
-        
-        // Test logging
-        TrackingTestLogger.shared.logInfo(category: "FOOD", message: "Logged: \(name) - \(calories) cal")
-        
         print("✅ [Food] Logged: \(name) - \(calories) cal")
     }
     
@@ -121,12 +115,6 @@ class FoodTrackingService: ObservableObject {
             data: entry.toDictionary()
         )
         
-        // Sync to AppGroup for watch fuel category
-        syncFoodToAppGroup()
-        
-        // Test logging
-        TrackingTestLogger.shared.logInfo(category: "FOOD", message: "Logged from AI: \(nutrition.name) - \(nutrition.calories) cal")
-        
         print("✅ [Food AI] Logged: \(nutrition.name) - \(nutrition.calories) cal")
     }
     
@@ -151,12 +139,6 @@ class FoodTrackingService: ObservableObject {
         
         // Update summary
         await updateNutritionSummary()
-        
-        // Sync to AppGroup for watch fuel category
-        syncFoodToAppGroup()
-        
-        // Test logging
-        TrackingTestLogger.shared.logInfo(category: "FOOD", message: "Deleted entry: \(id)")
         
         print("✅ [Food] Deleted entry: \(id)")
     }
@@ -541,69 +523,6 @@ class FoodTrackingService: ObservableObject {
         }
         favoriteFoods = favorites
     }
-    
-    // MARK: - AppGroup Sync for Watch Fuel Category
-    
-    /// Sync food data to AppGroup UserDefaults for watch fuel category updates
-    private func syncFoodToAppGroup() {
-        let appGroupIdentifier = "group.com.do.fitness"
-        guard let appGroupDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
-            TrackingTestLogger.shared.logError(category: "FOOD", message: "Failed to access AppGroup: \(appGroupIdentifier)")
-            print("⚠️ [Food] Failed to access AppGroup: \(appGroupIdentifier)")
-            return
-        }
-        
-        // Convert FoodEntry to FoodEntryData format (matching watch's expected format)
-        let foodEntryData = todaysFoods.map { entry -> FoodEntryData in
-            let formatter = ISO8601DateFormatter()
-            return FoodEntryData(
-                id: entry.id,
-                userId: entry.userId,
-                name: entry.name,
-                mealType: entry.mealType.rawValue,
-                calories: entry.calories,
-                protein: entry.protein,
-                carbs: entry.carbs,
-                fat: entry.fat,
-                servingSize: entry.servingSize,
-                notes: entry.notes,
-                timestamp: formatter.string(from: entry.timestamp),
-                source: entry.source.rawValue
-            )
-        }
-        
-        // Encode and save to AppGroup
-        if let encoded = try? JSONEncoder().encode(foodEntryData) {
-            appGroupDefaults.set(encoded, forKey: "todaysFoods")
-            appGroupDefaults.synchronize()
-            
-            // Test logging
-            TrackingTestLogger.shared.logAppGroupSync(category: "FOOD", key: "todaysFoods", entryCount: foodEntryData.count)
-            
-            print("✅ [Food] Synced \(foodEntryData.count) entries to AppGroup for watch fuel category")
-        } else {
-            TrackingTestLogger.shared.logError(category: "FOOD", message: "Failed to encode food data for AppGroup")
-            print("⚠️ [Food] Failed to encode food data for AppGroup")
-        }
-    }
-}
-
-// MARK: - FoodEntryData Model (for AppGroup sync)
-
-/// Data model matching watch's expected format for food entries
-struct FoodEntryData: Codable {
-    let id: String
-    let userId: String
-    let name: String
-    let mealType: String?
-    let calories: Double?
-    let protein: Double?
-    let carbs: Double?
-    let fat: Double?
-    let servingSize: String?
-    let notes: String?
-    let timestamp: String? // ISO8601 string
-    let source: String
 }
 
 // MARK: - Models

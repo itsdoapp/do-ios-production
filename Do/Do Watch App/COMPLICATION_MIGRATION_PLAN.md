@@ -136,3 +136,4 @@ struct DailyBricksWidget: Widget {
 - [WWDC 2022: Go further with Complications](https://developer.apple.com/videos/play/wwdc2022/10052/)
 - [WidgetKit Documentation](https://developer.apple.com/documentation/widgetkit)
 
+

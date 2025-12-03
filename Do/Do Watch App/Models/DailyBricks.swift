@@ -38,7 +38,7 @@ enum DailyBrickType: String, CaseIterable, Identifiable {
         case .heart: return "heart.fill"
         case .strength: return "figure.strengthtraining.traditional"
         case .recovery: return "figure.yoga"
-        case .mind: return "brain.head.profile"
+        case .mind: return "figure.mind.and.body"
         case .fuel: return "leaf.fill"
         }
     }
