@@ -910,9 +910,9 @@ extension HikeTrackingEngine {
                     // Re-evaluate GPS quality after a few seconds to ensure it's stable
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
                         guard let self = self, self.hikeState.isActive else { return }
-                        // Re-check GPS quality and update coordination if needed
-                        if self.hasGoodLocationData && !self.isPrimaryForDistance {
-                            print("📱 GPS stabilized - re-establishing device coordination")
+                        // Re-check GPS quality and update coordination if it has degraded
+                        if !self.hasGoodLocationData && self.isPrimaryForDistance {
+                            print("📱 GPS quality degraded - re-establishing device coordination")
                             self.establishDeviceCoordination()
                         }
                     }

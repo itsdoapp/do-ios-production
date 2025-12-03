@@ -1803,6 +1803,12 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     // MARK: - Settings Observer
     
     private func observePreferencesChanges() {
+        // Initialize tracked preference value
+        if let savedTypeString = UserDefaults.standard.string(forKey: "selectedBikeType"),
+           let savedType = BikeType(rawValue: savedTypeString) {
+            previousBikeType = savedType
+        }
+        
         // Observe when user preferences change
         NotificationCenter.default.addObserver(
             self,
@@ -1814,9 +1820,22 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     
     // Add a debouncing mechanism
     private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousBikeType: BikeType?
     
     @objc private func userPreferencesDidChange() {
-        print("🔄 User preferences changed notification received")
+        // Check if the actual preference key changed before processing
+        let currentBikeTypeString = UserDefaults.standard.string(forKey: "selectedBikeType")
+        let currentBikeType = currentBikeTypeString.flatMap { BikeType(rawValue: $0) }
+        
+        // Only process if the preference actually changed
+        guard currentBikeType != previousBikeType else {
+            // Not a preference change we care about - ignore
+            return
+        }
+        
+        // Update tracked value
+        previousBikeType = currentBikeType
         
         // Cancel any existing timer
         preferencesDebounceTimer?.invalidate()

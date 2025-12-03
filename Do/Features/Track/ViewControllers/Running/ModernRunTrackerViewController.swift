@@ -2142,6 +2142,12 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
     // MARK: - Settings Observer
     
     private func observePreferencesChanges() {
+        // Initialize tracked preference value
+        if let savedTypeString = UserDefaults.standard.string(forKey: "selectedRunType"),
+           let savedType = RunType(rawValue: savedTypeString) {
+            previousRunType = savedType
+        }
+        
         // Observe when user preferences change
         NotificationCenter.default.addObserver(
             self,
@@ -2153,9 +2159,22 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
     
     // Add a debouncing mechanism
     private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousRunType: RunType?
     
     @objc private func userPreferencesDidChange() {
-        print("🔄 User preferences changed notification received")
+        // Check if the actual preference key changed before processing
+        let currentRunTypeString = UserDefaults.standard.string(forKey: "selectedRunType")
+        let currentRunType = currentRunTypeString.flatMap { RunType(rawValue: $0) }
+        
+        // Only process if the preference actually changed
+        guard currentRunType != previousRunType else {
+            // Not a preference change we care about - ignore
+            return
+        }
+        
+        // Update tracked value
+        previousRunType = currentRunType
         
         // Cancel any existing timer
         preferencesDebounceTimer?.invalidate()

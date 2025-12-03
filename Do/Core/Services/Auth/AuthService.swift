@@ -334,8 +334,8 @@ class AuthService: ObservableObject {
             // Check if it's a 404 (user not found) before trying to create
             if case .serverError(let statusCode) = error, statusCode == 404 {
                 print("⚠️ [AuthService] User profile not found (404), creating... (retryCount: \(retryCount))")
-                // Increment retryCount to track the attempt
-                await createUserProfile(userId: userId, retryCount: retryCount)
+                // Increment retryCount to track the attempt and maintain symmetry with createUserProfile's retry logic
+                await createUserProfile(userId: userId, retryCount: retryCount + 1)
             } else {
                 print("⚠️ [AuthService] Error fetching user profile: \(error) - not a 404, skipping creation")
                 // Don't try to create if it's not a 404 - user might already exist

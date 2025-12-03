@@ -33,8 +33,6 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     }
     
     // MARK: - Properties
-    // Add a debouncing mechanism
-    private var preferencesDebounceTimer: Timer?
     weak var categoryDelegate: CategorySelectionDelegate?
     public var hostingController: UIHostingController<HikeTrackerView>?
     public var hikeTracker = HikeTrackingEngine.shared
@@ -2381,6 +2379,12 @@ extension ModernHikeTrackerViewController {
     // MARK: - Settings Observer
     
     private func observePreferencesChanges() {
+        // Initialize tracked preference value
+        if let savedTypeString = UserDefaults.standard.string(forKey: "selectedHikeType"),
+           let savedType = HikeType(rawValue: savedTypeString) {
+            previousHikeType = savedType
+        }
+        
         // Observe when user preferences change
         NotificationCenter.default.addObserver(
             self,
@@ -2390,10 +2394,24 @@ extension ModernHikeTrackerViewController {
         )
     }
     
- 
+    // Add a debouncing mechanism
+    private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousHikeType: HikeType?
     
     @objc private func userPreferencesDidChange() {
-        print("🔄 User preferences changed notification received")
+        // Check if the actual preference key changed before processing
+        let currentHikeTypeString = UserDefaults.standard.string(forKey: "selectedHikeType")
+        let currentHikeType = currentHikeTypeString.flatMap { HikeType(rawValue: $0) }
+        
+        // Only process if the preference actually changed
+        guard currentHikeType != previousHikeType else {
+            // Not a preference change we care about - ignore
+            return
+        }
+        
+        // Update tracked value
+        previousHikeType = currentHikeType
         
         // Cancel any existing timer
         preferencesDebounceTimer?.invalidate()
