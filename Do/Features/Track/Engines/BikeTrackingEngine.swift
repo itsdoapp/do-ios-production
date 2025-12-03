@@ -4246,38 +4246,45 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         }
         
         // Only update if auto tracking is disabled or we're specifically allowed to update
-        if !autoTrackingEnabled || allowExternalHeartRateUpdates {
-            // All of these property updates must happen on the main thread to avoid publishing errors
-            self.currentHeartRate = heartRate
-            self.heartRate = heartRate
-            self.formattedHeartRate = String(format: "%.0f", heartRate)
-            
-            // Store heart rate in the array of readings
-            if heartRateReadings.count >= 60 {
-                heartRateReadings.removeFirst()
-            }
-            heartRateReadings.append(heartRate)
-            
-            // Update heart rate zone
-            updateHeartRateZone()
-            
-            // Update calories if heart rate affects calculation
-            updateCaloriesBurned()
-            
-            // Only log meaningful heart rate changes or periodic updates
-            let now = Date()
-            let timeSinceLastLog = now.timeIntervalSince(lastHeartRateLogTime)
-            let heartRateChanged = abs(heartRate - lastLoggedHeartRate) >= 5
-            
-            if heartRateChanged || timeSinceLastLog >= 10.0 {
-                print("❤️ Heart rate updated: \(Int(heartRate)) bpm")
-                lastLoggedHeartRate = heartRate
-                lastHeartRateLogTime = now
-            }
-            
-            // Notify observers that heart rate has been updated
-            NotificationCenter.default.post(name: .heartRateUpdate, object: self, userInfo: ["heartRate": heartRate])
+        // This ensures consistency with other metrics (distance, cadence, calories) and allows
+        // the app to control whether external/watch-based heart rate should be used
+        guard !autoTrackingEnabled || allowExternalHeartRateUpdates else {
+            print("❤️ HEART RATE UPDATE BLOCKED - autoTracking: \(autoTrackingEnabled), allowExternal: \(allowExternalHeartRateUpdates), received: \(Int(heartRate))bpm")
+            return
         }
+        
+        print("❤️ HEART RATE UPDATE ACCEPTED - Old: \(Int(self.heartRate))bpm, New: \(Int(heartRate))bpm, autoTracking: \(autoTrackingEnabled), allowExternal: \(allowExternalHeartRateUpdates)")
+        
+        // All of these property updates must happen on the main thread to avoid publishing errors
+        self.currentHeartRate = heartRate
+        self.heartRate = heartRate
+        self.formattedHeartRate = String(format: "%.0f", heartRate)
+        
+        // Store heart rate in the array of readings
+        if heartRateReadings.count >= 60 {
+            heartRateReadings.removeFirst()
+        }
+        heartRateReadings.append(heartRate)
+        
+        // Update heart rate zone
+        updateHeartRateZone()
+        
+        // Update calories if heart rate affects calculation
+        updateCaloriesBurned()
+        
+        // Only log meaningful heart rate changes or periodic updates
+        let now = Date()
+        let timeSinceLastLog = now.timeIntervalSince(lastHeartRateLogTime)
+        let heartRateChanged = abs(heartRate - lastLoggedHeartRate) >= 5
+        
+        if heartRateChanged || timeSinceLastLog >= 10.0 {
+            print("❤️ Heart rate updated: \(Int(heartRate)) bpm")
+            lastLoggedHeartRate = heartRate
+            lastHeartRateLogTime = now
+        }
+        
+        // Notify observers that heart rate has been updated
+        NotificationCenter.default.post(name: .heartRateUpdate, object: self, userInfo: ["heartRate": heartRate])
     }
     
     // MARK: - External Metric Updates

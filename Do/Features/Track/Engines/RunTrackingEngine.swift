@@ -4344,8 +4344,16 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             return
         }
         
-        // Heart rate always comes from watch (watch is primary for heart rate)
-        // Always accept heart rate updates from watch coordination
+        // Only update if auto tracking is disabled or we're specifically allowed to update
+        // This ensures consistency with other metrics (distance, cadence, calories) and allows
+        // the app to control whether external/watch-based heart rate should be used
+        guard !autoTrackingEnabled || allowExternalHeartRateUpdates else {
+            print("❤️ HEART RATE UPDATE BLOCKED - autoTracking: \(autoTrackingEnabled), allowExternal: \(allowExternalHeartRateUpdates), received: \(Int(heartRate))bpm")
+            return
+        }
+        
+        print("❤️ HEART RATE UPDATE ACCEPTED - Old: \(Int(self.heartRate))bpm, New: \(Int(heartRate))bpm, autoTracking: \(autoTrackingEnabled), allowExternal: \(allowExternalHeartRateUpdates)")
+        
         // All of these property updates must happen on the main thread to avoid publishing errors
         self.currentHeartRate = heartRate
         self.heartRate = heartRate
