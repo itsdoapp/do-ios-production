@@ -4393,21 +4393,7 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         // Notify UI of metrics update
         NotificationCenter.default.post(name: .didUpdateRunMetrics, object: self)
         objectWillChange.send()
-            
-            // Update calories if heart rate affects calculation
-            updateCaloriesBurned()
-            
-     
-            
-            if heartRateChanged || timeSinceLastLog >= 10.0 {
-                print("❤️ Heart rate updated: \(Int(heartRate)) bpm")
-                lastLoggedHeartRate = heartRate
-                lastHeartRateLogTime = now
-            }
-            
-            // Notify observers that heart rate has been updated
-            NotificationCenter.default.post(name: .heartRateUpdate, object: self, userInfo: ["heartRate": heartRate])
-        }
+    }
     
     
     // MARK: - External Metric Updates

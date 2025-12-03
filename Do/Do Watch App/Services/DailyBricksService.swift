@@ -26,54 +26,58 @@ class DailyBricksService: ObservableObject {
     
     private init() {
         userDefaults = UserDefaults(suiteName: appGroupIdentifier)
-        loadTodayProgress()
+        Task {
+            await loadTodayProgress()
+        }
         
         // Reload progress every hour
         Timer.publish(every: 3600, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                self?.loadTodayProgress()
+                Task {
+                    await self?.loadTodayProgress()
+                }
             }
             .store(in: &cancellables)
     }
     
     // MARK: - Public Methods
     
-    func loadTodayProgress() {
-        isLoading = true
+    func loadTodayProgress() async {
+        await MainActor.run {
+            isLoading = true
+        }
         
-        Task {
-            let calendar = Calendar.current
-            let now = Date()
-            let startOfDay = calendar.startOfDay(for: now)
-            
-            // Load all brick data
-            async let moveData = loadMoveData(startOfDay: startOfDay)
-            async let heartData = loadHeartData(startOfDay: startOfDay)
-            async let strengthData = loadStrengthData(startOfDay: startOfDay)
-            async let recoveryData = loadRecoveryData(startOfDay: startOfDay)
-            async let mindData = loadMindData(startOfDay: startOfDay)
-            async let fuelData = loadFuelData(startOfDay: startOfDay)
-            
-            let (move, heart, strength, recovery, mind, fuel) = await (
-                moveData, heartData, strengthData, recoveryData, mindData, fuelData
-            )
-            
-            let loadedBricks = [move, heart, strength, recovery, mind, fuel].compactMap { $0 }
-            
-            await MainActor.run {
-                self.bricks = loadedBricks
-                // Calculate overall progress (average of all bricks)
-                if !loadedBricks.isEmpty {
-                    self.todayProgress = loadedBricks.map { $0.progress }.reduce(0, +) / Double(loadedBricks.count)
-                } else {
-                    self.todayProgress = 0.0
-                }
-                self.isLoading = false
-                
-                // Reload widget timeline
-                WidgetCenter.shared.reloadTimelines(ofKind: "DailyBricksWidget")
+        let calendar = Calendar.current
+        let now = Date()
+        let startOfDay = calendar.startOfDay(for: now)
+        
+        // Load all brick data
+        async let moveData = loadMoveData(startOfDay: startOfDay)
+        async let heartData = loadHeartData(startOfDay: startOfDay)
+        async let strengthData = loadStrengthData(startOfDay: startOfDay)
+        async let recoveryData = loadRecoveryData(startOfDay: startOfDay)
+        async let mindData = loadMindData(startOfDay: startOfDay)
+        async let fuelData = loadFuelData(startOfDay: startOfDay)
+        
+        let (move, heart, strength, recovery, mind, fuel) = await (
+            moveData, heartData, strengthData, recoveryData, mindData, fuelData
+        )
+        
+        let loadedBricks = [move, heart, strength, recovery, mind, fuel].compactMap { $0 }
+        
+        await MainActor.run {
+            self.bricks = loadedBricks
+            // Calculate overall progress (average of all bricks)
+            if !loadedBricks.isEmpty {
+                self.todayProgress = loadedBricks.map { $0.progress }.reduce(0, +) / Double(loadedBricks.count)
+            } else {
+                self.todayProgress = 0.0
             }
+            self.isLoading = false
+            
+            // Reload widget timeline
+            WidgetCenter.shared.reloadTimelines(ofKind: "DailyBricksWidget")
         }
     }
     

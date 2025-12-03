@@ -78,32 +78,49 @@ class HealthKitWorkoutManager: NSObject, ObservableObject {
     
     /// Request HealthKit authorization if needed (including heart rate)
     private func requestAuthorizationIfNeeded(completion: @escaping (Bool) -> Void) {
-        // Check if we already have authorization for workouts
+        // Define all required types
         let workoutType = HKObjectType.workoutType()
-        let status = healthStore.authorizationStatus(for: workoutType)
+        let heartRateType = HKObjectType.quantityType(forIdentifier: .heartRate)!
+        let activeEnergyType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!
+        let distanceType = HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!
+        let stepCountType = HKObjectType.quantityType(forIdentifier: .stepCount)!
         
-        if status == .sharingAuthorized {
-            // Already authorized
-            completion(true)
-            return
+        // Check authorization status for all required types, especially heart rate
+        let workoutStatus = healthStore.authorizationStatus(for: workoutType)
+        let heartRateStatus = healthStore.authorizationStatus(for: heartRateType)
+        
+        // Only return true if ALL critical types are authorized
+        // Heart rate is critical for workout tracking, so we must verify it's authorized
+        if workoutStatus == .sharingAuthorized && heartRateStatus == .sharingAuthorized {
+            // Check other types as well to ensure comprehensive authorization
+            let activeEnergyStatus = healthStore.authorizationStatus(for: activeEnergyType)
+            let distanceStatus = healthStore.authorizationStatus(for: distanceType)
+            
+            // If all critical types are authorized, we're good
+            if activeEnergyStatus == .sharingAuthorized && distanceStatus == .sharingAuthorized {
+                print("✅ HealthKit already authorized for all required types (including heart rate)")
+                completion(true)
+                return
+            }
         }
         
         // Request authorization with heart rate included
         let typesToRead: Set<HKObjectType> = [
-            HKObjectType.workoutType(),
-            HKObjectType.quantityType(forIdentifier: .heartRate)!,
-            HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
-            HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
-            HKObjectType.quantityType(forIdentifier: .stepCount)!
+            workoutType,
+            heartRateType,
+            activeEnergyType,
+            distanceType,
+            stepCountType
         ]
         
         let typesToWrite: Set<HKSampleType> = [
-            HKObjectType.workoutType(),
-            HKObjectType.quantityType(forIdentifier: .heartRate)!,
-            HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
-            HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!
+            workoutType,
+            heartRateType,
+            activeEnergyType,
+            distanceType
         ]
         
+        print("📋 Requesting HealthKit authorization for all required types (including heart rate)")
         healthStore.requestAuthorization(toShare: typesToWrite, read: typesToRead) { success, error in
             if let error = error {
                 print("❌ HealthKit authorization error: \(error.localizedDescription)")
