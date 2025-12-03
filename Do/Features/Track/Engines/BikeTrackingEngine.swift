@@ -4266,6 +4266,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         }
         heartRateReadings.append(heartRate)
         
+        // Update heart rate metrics (average, max, etc.)
+        updateHeartRateMetrics(heartRate)
+        
         // Update heart rate zone
         updateHeartRateZone()
         
