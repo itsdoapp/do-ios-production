@@ -27,9 +27,13 @@ class GenieAPIService: ObservableObject {
         return URLSession(configuration: config)
     }()
     
-    // Token balance cache (5 minute TTL)
+    // Token balance cache with optimistic updates for instant UI feedback
+    // Shorter TTL (2 minutes) ensures balance stays fresh while reducing API calls
     private var tokenBalanceCache: (balance: Int, timestamp: Date)?
-    private let tokenBalanceCacheTTL: TimeInterval = 300 // 5 minutes
+    private let tokenBalanceCacheTTL: TimeInterval = 120 // 2 minutes (reduced from 5 for better accuracy)
+    
+    // Track if we have a pending balance update to avoid race conditions
+    private var isUpdatingBalance = false
     
     private var cancellables = Set<AnyCancellable>()
     
@@ -168,6 +172,12 @@ class GenieAPIService: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 120 // Longer timeout for image processing
         
+        // Add Parse user ID header to ensure consistent user identification
+        if let userId = getCurrentUserIdForAPI() {
+            print("🧞 [API] Adding X-User-Id header for image query: \(userId)")
+            request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        }
+        
         let body = GenieImageQueryRequest(query: enriched, sessionId: sessionId, image: imageBase64, isVoiceInput: false, latitude: latitude, longitude: longitude)
         request.httpBody = try JSONEncoder().encode(body)
         
@@ -242,6 +252,12 @@ class GenieAPIService: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 180 // Even longer timeout for video processing
+        
+        // Add Parse user ID header to ensure consistent user identification
+        if let userId = getCurrentUserIdForAPI() {
+            print("🧞 [API] Adding X-User-Id header for video query: \(userId)")
+            request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        }
         
         let body = GenieVideoQueryRequest(query: enriched, sessionId: sessionId, frames: frames, isVoiceInput: false)
         request.httpBody = try JSONEncoder().encode(body)
@@ -334,6 +350,15 @@ class GenieAPIService: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Add Parse user ID header to ensure consistent user identification across all endpoints
+        // This prevents balance mismatches between query and balance endpoints
+        if let userId = getCurrentUserIdForAPI() {
+            print("🧞 [API] Adding X-User-Id header for query: \(userId)")
+            request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        } else {
+            print("🧞 [API] ⚠️ No user ID available for query request")
+        }
         
         let body = GenieQueryRequest(query: enriched, sessionId: sessionId, isVoiceInput: isVoiceInput, latitude: latitude, longitude: longitude, conversationHistory: conversationHistory)
         let requestBody = try JSONEncoder().encode(body)
@@ -473,7 +498,8 @@ class GenieAPIService: ObservableObject {
             print("🧞 [API] ⚠️ No user ID available for balance request")
         }
         
-        request.timeoutInterval = 15 // 15 second timeout for balance requests
+        // Reduced timeout for faster failure and better UX (balance should be fast)
+        request.timeoutInterval = 8 // 8 second timeout (reduced from 15s)
         
         let (data, response) = try await urlSession.data(for: request)
         
@@ -535,6 +561,57 @@ class GenieAPIService: ObservableObject {
     func clearTokenBalanceCache() {
         tokenBalanceCache = nil
         print("🧞 [API] Cleared token balance cache")
+    }
+    
+    /// Optimistically update balance for instant UI feedback (before server confirms)
+    /// This provides immediate visual feedback while the actual balance is fetched
+    func optimisticallyUpdateBalance(deduction: Int) {
+        guard let cached = tokenBalanceCache else {
+            print("🧞 [API] ⚠️ No cached balance to update optimistically")
+            return
+        }
+        
+        let newBalance = max(0, cached.balance - deduction)
+        tokenBalanceCache = (balance: newBalance, timestamp: Date())
+        print("🧞 [API] ⚡️ Optimistically updated balance: \(cached.balance) → \(newBalance) (-\(deduction) tokens)")
+        
+        // Post notification for instant UI update
+        NotificationCenter.default.post(
+            name: NSNotification.Name("TokenBalanceUpdated"),
+            object: nil,
+            userInfo: ["balance": newBalance, "tokensUsed": deduction, "optimistic": true]
+        )
+    }
+    
+    /// Get cached balance synchronously (for UI display without async/await)
+    func getCachedBalance() -> Int? {
+        guard let cached = tokenBalanceCache,
+              Date().timeIntervalSince(cached.timestamp) < tokenBalanceCacheTTL else {
+            return nil
+        }
+        return cached.balance
+    }
+    
+    /// Refresh balance in background without blocking UI
+    /// Use this for periodic updates that don't need immediate results
+    func refreshBalanceInBackground() {
+        guard !isUpdatingBalance else {
+            print("🧞 [API] Balance update already in progress, skipping")
+            return
+        }
+        
+        isUpdatingBalance = true
+        Task {
+            defer { isUpdatingBalance = false }
+            
+            do {
+                let response = try await getTokenBalance(useCache: false)
+                print("🧞 [API] ✅ Background balance refresh completed: \(response.balance) tokens")
+            } catch {
+                print("🧞 [API] ⚠️ Background balance refresh failed: \(error.localizedDescription)")
+                // Don't throw - this is a background operation
+            }
+        }
     }
     
     func initializeUser() async throws {

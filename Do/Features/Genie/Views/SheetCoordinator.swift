@@ -85,10 +85,11 @@ class SheetCoordinator: ObservableObject {
             }
         case .tokenPurchase:
             // Use SmartTokenUpsellView for unified experience
-            // Default values for token shop context
+            // Get actual balance from cache for accurate display
+            let actualBalance = GenieAPIService.shared.getCachedBalance() ?? 0
             return AnyView(SmartTokenUpsellView(
                 required: 100,
-                balance: 0, // Will be loaded by the view
+                balance: actualBalance, // Use actual cached balance
                 queryType: "general",
                 tier: 0,
                 hasSubscription: false,
