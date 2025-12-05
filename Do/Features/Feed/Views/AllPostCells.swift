@@ -6,6 +6,18 @@
 //
 
 import SwiftUI
+
+// MARK: - Environment Keys for Post Operations
+private struct PostIdKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
+extension EnvironmentValues {
+    var postId: String? {
+        get { self[PostIdKey.self] }
+        set { self[PostIdKey.self] = newValue }
+    }
+}
 import MapKit
 import CoreLocation
 
@@ -202,6 +214,7 @@ struct PostOptionsMenu: View {
     let onArchive: () -> Void
     let onReport: () -> Void
     @Binding var isShowing: Bool
+    @Environment(\.postId) var postId // Read postId from environment
     var alignment: Alignment = .topTrailing // Default to top-right
     
     var body: some View {
@@ -213,8 +226,15 @@ struct PostOptionsMenu: View {
                     title: "Delete",
                     isDestructive: true,
                     action: {
-                    onDelete()
-                    isShowing = false
+                        // Broadcast delete notification with post ID from environment
+                        if let postId = postId {
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("DeletePost"),
+                                object: nil,
+                                userInfo: ["postId": postId]
+                            )
+                        }
+                        isShowing = false
                     }
                 )
                 
@@ -226,7 +246,14 @@ struct PostOptionsMenu: View {
                     title: "Hide",
                     isDestructive: false,
                     action: {
-                        onHide()
+                        // Broadcast hide notification with post ID from environment
+                        if let postId = postId {
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("HidePost"),
+                                object: nil,
+                                userInfo: ["postId": postId]
+                            )
+                        }
                         isShowing = false
                     }
                 )
@@ -239,7 +266,14 @@ struct PostOptionsMenu: View {
                     title: "Archive",
                     isDestructive: false,
                     action: {
-                        onArchive()
+                        // Broadcast archive notification with post ID from environment
+                        if let postId = postId {
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("ArchivePost"),
+                                object: nil,
+                                userInfo: ["postId": postId]
+                            )
+                        }
                         isShowing = false
                     }
                 )
@@ -250,8 +284,15 @@ struct PostOptionsMenu: View {
                     title: "Report",
                     isDestructive: true,
                     action: {
-                    onReport()
-                    isShowing = false
+                        // Broadcast report notification with post ID from environment
+                        if let postId = postId {
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("ReportPost"),
+                                object: nil,
+                                userInfo: ["postId": postId]
+                            )
+                        }
+                        isShowing = false
                     }
                 )
             }
@@ -408,16 +449,16 @@ struct StandardPostCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -538,16 +579,16 @@ struct PostCaptionTopCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -724,16 +765,16 @@ struct PostCaptionCenterCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -911,16 +952,16 @@ struct PostCaptionBottomCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -1096,16 +1137,16 @@ struct PostWorkoutCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -1411,16 +1452,16 @@ struct PostWorkoutSessionCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -1641,16 +1682,16 @@ struct LocationWorkoutPostCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -1774,16 +1815,16 @@ struct PostThoughtsCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )
@@ -2020,16 +2061,16 @@ struct PostClassicWorkoutCell: View {
                 PostOptionsMenu(
                     isOwnPost: isOwnPost,
                     onDelete: {
-                        print("Delete post")
+                        // Delete handled internally by PostOptionsMenu using environment
                     },
                     onHide: {
-                        print("Hide post")
+                        // Hide handled internally by PostOptionsMenu using environment
                     },
                     onArchive: {
-                        print("Archive post")
+                        // Archive handled internally by PostOptionsMenu using environment
                     },
                     onReport: {
-                        print("Report post")
+                        // Report handled internally by PostOptionsMenu using environment
                     },
                     isShowing: $showingMenu
                 )

@@ -118,6 +118,34 @@ struct FeedView: View {
                     // Always load fresh data when view appears
                     await viewModel.loadFeed()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeletePost"))) { notification in
+                    if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                        Task {
+                            await viewModel.deletePost(postId: postId)
+                        }
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HidePost"))) { notification in
+                    if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                        Task {
+                            await viewModel.hidePost(postId: postId)
+                        }
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ArchivePost"))) { notification in
+                    if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                        Task {
+                            await viewModel.archivePost(postId: postId)
+                        }
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ReportPost"))) { notification in
+                    if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                        Task {
+                            await viewModel.reportPost(postId: postId)
+                        }
+                    }
+                }
                 
                 // Transparent Header (overlay on top)
                 VStack {

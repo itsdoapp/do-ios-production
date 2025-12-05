@@ -54,10 +54,10 @@ struct OutdoorBikeTrackerView: View {
     private let cardBackground = Color(UIColor(red: 0.12, green: 0.15, blue: 0.25, alpha: 0.9))
     private let cardCornerRadius: CGFloat = 16
     
-    
-    
-    // Run engine reference for data (direct access, not computed)
-    private let bikeEngine = BikeTrackingEngine.shared
+    // Use viewModel's bikeEngine instead of creating a duplicate
+    private var bikeEngine: BikeTrackingEngine {
+        return viewModel.bikeEngine
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -1262,6 +1262,26 @@ class OutdoorBikeViewController: UIViewController, CLLocationManagerDelegate, MK
             if isJoiningExistingWorkout {
                 print("📱 Joining existing workout from watch, skipping auto-start")
                 
+                // Establish device coordination when joining
+                bikeEngine.establishDeviceCoordination()
+                
+                // Ensure metrics coordinator is set up
+                if metricsCoordinator == nil {
+                    setupBikeRideMetricsCoordinator()
+                }
+                metricsCoordinator?.updatePolicy(
+                    isIndoor: false, // Biking is always outdoor
+                    hasGoodGPS: bikeEngine.hasGoodLocationData,
+                    isWatchTracking: bikeEngine.isWatchTracking
+                )
+                
+                // Request immediate metrics sync from watch
+                if WCSession.default.isReachable {
+                    WCSession.default.sendMessage(["type": "syncWorkoutData"], replyHandler: nil) { error in
+                        print("⚠️ Error requesting metrics sync: \(error.localizedDescription)")
+                    }
+                }
+                
                 // Update UI immediately with current metrics
                 updateUIWithLatestMetrics()
                 
@@ -1384,8 +1404,9 @@ class OutdoorBikeViewController: UIViewController, CLLocationManagerDelegate, MK
     @objc private func handleAppWillResignActive() {
         print("📱 App going to background - ensuring tracking continues")
         
-        // Make sure location updates continue in background
-        locationManager.allowsBackgroundLocationUpdates = true
+        // Safely make sure location updates continue in background
+        // This will only enable if proper authorization and capabilities are in place
+        _ = locationManager.safelyEnableBackgroundLocationUpdates()
         
         // Ensure audio session is active to maintain background operation
         LoudnessManager.shared.startBackgroundAudio()
@@ -1655,7 +1676,11 @@ class OutdoorBikeViewController: UIViewController, CLLocationManagerDelegate, MK
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 5 // Update every 5 meters for more accuracy
-        locationManager.allowsBackgroundLocationUpdates = true
+        // CRITICAL: Don't set allowsBackgroundLocationUpdates here - it can only be set
+        // when authorized and during active tracking. It will be set automatically
+        // when startTracking() is called on ModernLocationManager.
+        // Setting it here causes a crash if the app doesn't have the proper
+        // background location capability or authorization.
         locationManager.startUpdatingLocation()
     }
     
@@ -8988,6 +9013,44 @@ extension OutdoorBikeViewController: WorkoutCommunicationDelegate {
     // Implement all required methods from the protocol
     func didReceiveWorkoutUpdate(_ update: WorkoutPayload) {
         print("📱 Received workout update: \(update.type)")
+        
+        // Convert WorkoutPayload to dictionary format for existing handlers
+        var updateDict: [String: Any] = [
+            "type": update.type,
+            "timestamp": update.timestamp
+        ]
+        
+        if let workoutId = update.workoutId {
+            updateDict["id"] = workoutId
+            updateDict["workoutId"] = workoutId
+        }
+        
+        if let workoutType = update.workoutType {
+            updateDict["workoutType"] = workoutType
+        }
+        
+        if let state = update.state {
+            updateDict["state"] = state
+        }
+        
+        if let metrics = update.metrics {
+            updateDict["distance"] = metrics.distance
+            updateDict["elapsedTime"] = metrics.elapsedTime
+            updateDict["heartRate"] = metrics.heartRate
+            updateDict["pace"] = metrics.pace
+            updateDict["calories"] = metrics.calories
+            if let cadence = metrics.cadence {
+                updateDict["cadence"] = cadence
+            }
+            if let elevationGain = metrics.elevationGain {
+                updateDict["elevationGain"] = elevationGain
+            }
+        }
+        
+        // Route to specific handler based on workout type
+        if let workoutType = update.workoutType, workoutType == "bike" {
+            didReceiveRunningWorkoutUpdate(updateDict)
+        }
     }
     
     func didReceiveSetUpdate(_ update: SetPayload) {

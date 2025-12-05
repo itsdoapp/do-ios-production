@@ -303,10 +303,8 @@ extension SwimmingTrackingEngine {
                 "type": "handoffResponse",
                 "accepted": true,
                 "workoutId": workoutId.uuidString
-            ], replyHandler: { response in
-                print("📱 Watch acknowledged handoff response: \(response)")
-            }, errorHandler: { error in
-                print("📱 Error sending handoff response: \(error.localizedDescription)")
+            ], replyHandler: { _ in }, errorHandler: { error in
+                print("❌ [SwimmingTrackingEngine] Error sending handoff response: \(error.localizedDescription)")
             })
         }
     }

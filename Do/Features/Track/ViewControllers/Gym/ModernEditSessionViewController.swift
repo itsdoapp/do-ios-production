@@ -273,8 +273,80 @@ struct EditSessionView: View {
             headerView
             sessionDetailsSection
             durationSection
+            movementsSection
         }
         .padding(.vertical, 20)
+    }
+    
+    private var movementsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Movements")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                
+                Spacer()
+                
+                Button(action: {
+                    // Present movement selector
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let window = windowScene.windows.first,
+                       let rootVC = window.rootViewController {
+                        let movementSelector = SelectMovementViewController()
+                        movementSelector.modalPresentationStyle = .pageSheet
+                        movementSelector.onMovementSelected = { selectedMovement in
+                            if draftSession.movementsInSession == nil {
+                                draftSession.movementsInSession = []
+                            }
+                            draftSession.movementsInSession?.append(selectedMovement)
+                        }
+                        rootVC.present(movementSelector, animated: true)
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 16))
+                        Text("Add Movement")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.15))
+                    .cornerRadius(8)
+                }
+            }
+            .padding(.horizontal, 20)
+            
+            if let movements = draftSession.movementsInSession, !movements.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(Array(movements.enumerated()), id: \.element.id) { index, movement in
+                        MovementRowView(
+                            movement: movement,
+                            onDelete: {
+                                draftSession.movementsInSession?.remove(at: index)
+                            }
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "figure.strengthtraining.traditional")
+                        .font(.system(size: 32))
+                        .foregroundColor(.white.opacity(0.3))
+                    Text("No movements added yet")
+                        .font(.system(size: 14))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(12)
+                .padding(.horizontal, 20)
+            }
+        }
+        .padding(.bottom, 40)
     }
     
     var body: some View {
@@ -285,6 +357,7 @@ struct EditSessionView: View {
             
             ScrollView {
                 scrollContent
+                    .padding(.bottom, 100) // Extra padding for save button
             }
             
             // Save Button (fixed at bottom)
@@ -317,9 +390,9 @@ struct EditSessionView: View {
         
         isSaving = true
         
-        // Convert movements to dictionaries
+        // Convert movements to dictionaries with all fields including sets
         let movementsDict: [[String: Any]] = (draftSession.movementsInSession ?? []).map { movement in
-            var dict: [String: Any] = ["id": movement.id]
+            var dict: [String: Any] = ["id": movement.id, "movementId": movement.id]
             if let name = movement.movement1Name { dict["movement1Name"] = name }
             if let name2 = movement.movement2Name { dict["movement2Name"] = name2 }
             if let category = movement.category { dict["category"] = category }
@@ -327,6 +400,57 @@ struct EditSessionView: View {
             if let description = movement.description { dict["description"] = description }
             dict["isSingle"] = movement.isSingle
             dict["isTimed"] = movement.isTimed
+            
+            // Include sets
+            if let templateSets = movement.templateSets {
+                dict["templateSets"] = templateSets.map { set -> [String: Any] in
+                    var setDict: [String: Any] = ["id": set.id]
+                    if let reps = set.reps { setDict["reps"] = reps }
+                    if let weight = set.weight { setDict["weight"] = weight }
+                    if let duration = set.duration { setDict["duration"] = duration }
+                    if let sec = set.duration { setDict["sec"] = sec } // Also include "sec" for compatibility
+                    return setDict
+                }
+            }
+            
+            if let firstSectionSets = movement.firstSectionSets {
+                dict["firstSectionSets"] = firstSectionSets.map { set -> [String: Any] in
+                    var setDict: [String: Any] = ["id": set.id]
+                    if let reps = set.reps { setDict["reps"] = reps }
+                    if let weight = set.weight { setDict["weight"] = weight }
+                    if let duration = set.duration { setDict["duration"] = duration }
+                    if let sec = set.duration { setDict["sec"] = sec }
+                    return setDict
+                }
+            }
+            
+            if let secondSectionSets = movement.secondSectionSets {
+                dict["secondSectionSets"] = secondSectionSets.map { set -> [String: Any] in
+                    var setDict: [String: Any] = ["id": set.id]
+                    if let reps = set.reps { setDict["reps"] = reps }
+                    if let weight = set.weight { setDict["weight"] = weight }
+                    if let duration = set.duration { setDict["duration"] = duration }
+                    if let sec = set.duration { setDict["sec"] = sec }
+                    return setDict
+                }
+            }
+            
+            if let weavedSets = movement.weavedSets {
+                dict["weavedSets"] = weavedSets.map { set -> [String: Any] in
+                    var setDict: [String: Any] = ["id": set.id]
+                    if let reps = set.reps { setDict["reps"] = reps }
+                    if let weight = set.weight { setDict["weight"] = weight }
+                    if let duration = set.duration { setDict["duration"] = duration }
+                    if let sec = set.duration { setDict["sec"] = sec }
+                    return setDict
+                }
+            }
+            
+            // Include equipment
+            if let equipmentsNeeded = movement.equipmentsNeeded {
+                dict["equipmentNeeded"] = !equipmentsNeeded.isEmpty
+            }
+            
             return dict
         }
         
@@ -386,5 +510,52 @@ struct EditSessionView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Movement Row View
+
+struct MovementRowView: View {
+    let movement: movement
+    let onDelete: () -> Void
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(movement.movement1Name ?? "Unnamed Movement")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                
+                if let name2 = movement.movement2Name, !name2.isEmpty {
+                    Text(name2)
+                        .font(.system(size: 14))
+                        .foregroundColor(.white.opacity(0.7))
+                }
+                
+                if let category = movement.category {
+                    Text(category)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+            }
+            
+            Spacer()
+            
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.system(size: 16))
+                    .foregroundColor(.red.opacity(0.8))
+                    .padding(8)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(8)
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
     }
 }

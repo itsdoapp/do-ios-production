@@ -197,92 +197,146 @@ struct RoutePreviewView: View {
     let onSelectRoute: () -> Void
     let onDismiss: () -> Void
     
-    @Environment(\.presentationMode) var presentationMode
+    @State private var mapRegion: MKCoordinateRegion
+    
+    init(trail: Trail, onSelectRoute: @escaping () -> Void, onDismiss: @escaping () -> Void) {
+        self.trail = trail
+        self.onSelectRoute = onSelectRoute
+        self.onDismiss = onDismiss
+        
+        // Calculate initial map region from trail coordinates
+        if !trail.coordinates.isEmpty {
+            let coordinates = trail.coordinates.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+            let minLat = coordinates.map { $0.latitude }.min() ?? 0
+            let maxLat = coordinates.map { $0.latitude }.max() ?? 0
+            let minLon = coordinates.map { $0.longitude }.min() ?? 0
+            let maxLon = coordinates.map { $0.longitude }.max() ?? 0
+            
+            let center = CLLocationCoordinate2D(
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLon + maxLon) / 2
+            )
+            let span = MKCoordinateSpan(
+                latitudeDelta: max((maxLat - minLat) * 1.5, 0.01),
+                longitudeDelta: max((maxLon - minLon) * 1.5, 0.01)
+            )
+            _mapRegion = State(initialValue: MKCoordinateRegion(center: center, span: span))
+        } else {
+            _mapRegion = State(initialValue: MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
+                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            ))
+        }
+    }
     
     var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Route header
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Header with title and close button
+                HStack {
+                    Text("Route Preview")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        onDismiss()
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.gray)
+                    }
+                }
+                .padding()
+                
+                // Route header
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(trail.name)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    
+                    if let description = trail.description {
+                        Text(description)
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+                }
+                .padding(.horizontal)
+                
+                // Map preview with route
+                if !trail.coordinates.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(trail.name ?? "Unnamed Route")
-                            .font(.title)
-                            .fontWeight(.bold)
+                        Text("Route Map")
+                            .font(.headline)
                             .foregroundColor(.white)
+                            .padding(.horizontal)
                         
-                        if let description = trail.description {
-                            Text(description)
-                                .font(.body)
-                                .foregroundColor(.gray)
+                        RoutePreviewMapView(
+                            coordinates: trail.coordinates.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) },
+                            region: mapRegion
+                        )
+                        .frame(height: 250)
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                    }
+                }
+                
+                // Route stats
+                HStack(spacing: 20) {
+                    StatCard(
+                        icon: "ruler",
+                        value: String(format: "%.2f", trail.length),
+                        label: "Distance (mi)"
+                    )
+                    
+                    StatCard(
+                        icon: "arrow.up.right",
+                        value: String(format: "%.0f", trail.elevationGain),
+                        label: "Elevation (ft)"
+                    )
+                    
+                    StatCard(
+                        icon: "figure.run",
+                        value: difficultyText,
+                        label: "Difficulty"
+                    )
+                }
+                .padding(.horizontal)
+                
+                // Action buttons
+                VStack(spacing: 12) {
+                    Button(action: {
+                        onSelectRoute()
+                    }) {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Select Route")
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
                     }
-                    .padding()
                     
-                    // Route stats
-                    HStack(spacing: 20) {
-                        StatCard(
-                            icon: "ruler",
-                            value: String(format: "%.2f", trail.length),
-                            label: "Distance (mi)"
-                        )
-                        
-                        StatCard(
-                            icon: "arrow.up.right",
-                            value: String(format: "%.0f", trail.elevationGain),
-                            label: "Elevation (ft)"
-                        )
-                        
-                        StatCard(
-                            icon: "figure.run",
-                            value: difficultyText,
-                            label: "Difficulty"
-                        )
-                    }
-                    .padding(.horizontal)
-                    
-                    // Action buttons
-                    VStack(spacing: 12) {
-                        Button(action: {
-                            onSelectRoute()
-                            presentationMode.wrappedValue.dismiss()
-                        }) {
-                            HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text("Select Route")
-                            }
+                    Button(action: {
+                        onDismiss()
+                    }) {
+                        Text("Cancel")
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
+                            .background(Color.gray.opacity(0.3))
                             .foregroundColor(.white)
                             .cornerRadius(12)
-                        }
-                        
-                        Button(action: {
-                            onDismiss()
-                            presentationMode.wrappedValue.dismiss()
-                        }) {
-                            Text("Cancel")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.gray.opacity(0.3))
-                                .foregroundColor(.white)
-                                .cornerRadius(12)
-                        }
-                    }
-                    .padding()
-                }
-            }
-            .background(Color.black.opacity(0.9))
-            .navigationTitle("Route Preview")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        presentationMode.wrappedValue.dismiss()
                     }
                 }
+                .padding()
             }
         }
+        .background(Color.black.opacity(0.95))
     }
     
     private var difficultyText: String {
@@ -320,6 +374,99 @@ struct StatCard: View {
         .padding()
         .background(Color.white.opacity(0.1))
         .cornerRadius(12)
+    }
+}
+
+// MARK: - Route Preview Map View
+
+struct RoutePreviewMapView: UIViewRepresentable {
+    let coordinates: [CLLocationCoordinate2D]
+    let region: MKCoordinateRegion
+    
+    func makeUIView(context: Context) -> MKMapView {
+        let mapView = MKMapView()
+        mapView.delegate = context.coordinator
+        mapView.mapType = .standard
+        mapView.isUserInteractionEnabled = true
+        mapView.isZoomEnabled = true
+        mapView.isScrollEnabled = true
+        mapView.showsCompass = true
+        mapView.showsUserLocation = false
+        
+        // Set initial region
+        mapView.setRegion(region, animated: false)
+        
+        // Add route polyline
+        if coordinates.count >= 2 {
+            let polyline = MKPolyline(coordinates: coordinates, count: coordinates.count)
+            mapView.addOverlay(polyline, level: .aboveRoads)
+        }
+        
+        // Add start and end markers
+        if let start = coordinates.first {
+            let startAnnotation = MKPointAnnotation()
+            startAnnotation.coordinate = start
+            startAnnotation.title = "Start"
+            mapView.addAnnotation(startAnnotation)
+        }
+        
+        if let end = coordinates.last, coordinates.count > 1 {
+            let endAnnotation = MKPointAnnotation()
+            endAnnotation.coordinate = end
+            endAnnotation.title = "End"
+            mapView.addAnnotation(endAnnotation)
+        }
+        
+        return mapView
+    }
+    
+    func updateUIView(_ mapView: MKMapView, context: Context) {
+        // Update region if needed
+        mapView.setRegion(region, animated: false)
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator: NSObject, MKMapViewDelegate {
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor.systemBlue
+                renderer.lineWidth = 4
+                renderer.lineCap = .round
+                renderer.lineJoin = .round
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
+        }
+        
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard !(annotation is MKUserLocation) else { return nil }
+            
+            let identifier = "RouteMarker"
+            var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
+            
+            if annotationView == nil {
+                annotationView = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: identifier)
+                annotationView?.canShowCallout = true
+            } else {
+                annotationView?.annotation = annotation
+            }
+            
+            if let markerView = annotationView as? MKMarkerAnnotationView {
+                if annotation.title == "Start" {
+                    markerView.markerTintColor = .green
+                    markerView.glyphImage = UIImage(systemName: "flag.fill")
+                } else if annotation.title == "End" {
+                    markerView.markerTintColor = .red
+                    markerView.glyphImage = UIImage(systemName: "flag.checkered")
+                }
+            }
+            
+            return annotationView
+        }
     }
 }
 

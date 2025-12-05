@@ -181,6 +181,19 @@ class GenieAPIService: ObservableObject {
         
         if httpResponse.statusCode == 402 {
             let upsellResponse = try JSONDecoder().decode(InsufficientTokensResponse.self, from: data)
+            
+            // CRITICAL: Update token balance cache with the actual balance from error response
+            // The cache might be stale, so we use the server's actual balance
+            tokenBalanceCache = (balance: upsellResponse.balance, timestamp: Date())
+            print("🧞 [API] ⚠️ Insufficient tokens (image query) - updated cache with actual balance: \(upsellResponse.balance)")
+            
+            // Post notification to update UI balance immediately
+            NotificationCenter.default.post(
+                name: NSNotification.Name("TokenBalanceUpdated"),
+                object: nil,
+                userInfo: ["balance": upsellResponse.balance, "tokensUsed": 0]
+            )
+            
             let upsellData = UpsellData(
                 error: upsellResponse.error,
                 required: upsellResponse.required,
@@ -196,7 +209,19 @@ class GenieAPIService: ObservableObject {
             throw GenieError.serverError(httpResponse.statusCode)
         }
         
-        return try JSONDecoder().decode(GenieQueryResponse.self, from: data)
+        // Update token balance cache with remaining tokens from response
+        let genieResponse = try JSONDecoder().decode(GenieQueryResponse.self, from: data)
+        tokenBalanceCache = (balance: genieResponse.tokensRemaining, timestamp: Date())
+        print("🧞 [API] Updated token balance cache from image query response: \(genieResponse.tokensRemaining)")
+        
+        // Post notification to update UI balance
+        NotificationCenter.default.post(
+            name: NSNotification.Name("TokenBalanceUpdated"),
+            object: nil,
+            userInfo: ["balance": genieResponse.tokensRemaining, "tokensUsed": genieResponse.tokensUsed]
+        )
+        
+        return genieResponse
     }
     
     func queryWithVideo(_ text: String, frames: [String], sessionId: String = UUID().uuidString) async throws -> GenieQueryResponse {
@@ -231,6 +256,19 @@ class GenieAPIService: ObservableObject {
         
         if httpResponse.statusCode == 402 {
             let upsellResponse = try JSONDecoder().decode(InsufficientTokensResponse.self, from: data)
+            
+            // CRITICAL: Update token balance cache with the actual balance from error response
+            // The cache might be stale, so we use the server's actual balance
+            tokenBalanceCache = (balance: upsellResponse.balance, timestamp: Date())
+            print("🧞 [API] ⚠️ Insufficient tokens (video query) - updated cache with actual balance: \(upsellResponse.balance)")
+            
+            // Post notification to update UI balance immediately
+            NotificationCenter.default.post(
+                name: NSNotification.Name("TokenBalanceUpdated"),
+                object: nil,
+                userInfo: ["balance": upsellResponse.balance, "tokensUsed": 0]
+            )
+            
             let upsellData = UpsellData(
                 error: upsellResponse.error,
                 required: upsellResponse.required,
@@ -246,7 +284,19 @@ class GenieAPIService: ObservableObject {
             throw GenieError.serverError(httpResponse.statusCode)
         }
         
-        return try JSONDecoder().decode(GenieQueryResponse.self, from: data)
+        // Update token balance cache with remaining tokens from response
+        let genieResponse = try JSONDecoder().decode(GenieQueryResponse.self, from: data)
+        tokenBalanceCache = (balance: genieResponse.tokensRemaining, timestamp: Date())
+        print("🧞 [API] Updated token balance cache from video query response: \(genieResponse.tokensRemaining)")
+        
+        // Post notification to update UI balance
+        NotificationCenter.default.post(
+            name: NSNotification.Name("TokenBalanceUpdated"),
+            object: nil,
+            userInfo: ["balance": genieResponse.tokensRemaining, "tokensUsed": genieResponse.tokensUsed]
+        )
+        
+        return genieResponse
     }
     
     func query(_ text: String, sessionId: String = UUID().uuidString, isVoiceInput: Bool = false, conversationHistory: [ConversationMessage]? = nil) async throws -> GenieQueryResponse {
@@ -321,6 +371,19 @@ class GenieAPIService: ObservableObject {
         if httpResponse.statusCode == 402 {
             // Insufficient tokens - parse full upsell data
             let upsellResponse = try JSONDecoder().decode(InsufficientTokensResponse.self, from: data)
+            
+            // CRITICAL: Update token balance cache with the actual balance from error response
+            // The cache might be stale, so we use the server's actual balance
+            tokenBalanceCache = (balance: upsellResponse.balance, timestamp: Date())
+            print("🧞 [API] ⚠️ Insufficient tokens (text query) - updated cache with actual balance: \(upsellResponse.balance)")
+            
+            // Post notification to update UI balance immediately
+            NotificationCenter.default.post(
+                name: NSNotification.Name("TokenBalanceUpdated"),
+                object: nil,
+                userInfo: ["balance": upsellResponse.balance, "tokensUsed": 0]
+            )
+            
             let upsellData = UpsellData(
                 error: upsellResponse.error,
                 required: upsellResponse.required,
@@ -358,6 +421,18 @@ class GenieAPIService: ObservableObject {
                 )
             }
         }
+        
+        // CRITICAL: Query endpoint balance is authoritative - always use it
+        // This is what the backend actually checks when making queries
+        tokenBalanceCache = (balance: genieResponse.tokensRemaining, timestamp: Date())
+        print("🧞 [API] ✅ Updated token balance cache from query response (AUTHORITATIVE): \(genieResponse.tokensRemaining) tokens")
+        
+        // Post notification to update UI balance (GenieView will also update directly, but this ensures other views stay in sync)
+        NotificationCenter.default.post(
+            name: NSNotification.Name("TokenBalanceUpdated"),
+            object: nil,
+            userInfo: ["balance": genieResponse.tokensRemaining, "tokensUsed": genieResponse.tokensUsed]
+        )
         
         return genieResponse
     }
@@ -437,8 +512,21 @@ class GenieAPIService: ObservableObject {
         
         let balanceResponse = try JSONDecoder().decode(TokenBalanceResponse.self, from: data)
         
-        // Update cache
+        // The balance endpoint is the source of truth - it reads directly from the database
+        // Log the balance breakdown for debugging
+        if let subscription = balanceResponse.subscription {
+            let calculated = subscription.tokensRemainingThisMonth + subscription.topUpBalance
+            print("🧞 [API] Balance endpoint returned: \(balanceResponse.balance) (field) vs \(calculated) (calculated: \(subscription.tokensRemainingThisMonth) + \(subscription.topUpBalance))")
+            
+            // If there's a discrepancy, log it (this should not happen if backend is correct)
+            if balanceResponse.balance != calculated {
+                print("⚠️ [API] Balance field (\(balanceResponse.balance)) differs from calculated (\(calculated)). This may indicate a backend calculation issue.")
+            }
+        }
+        
+        // Update cache with balance endpoint value (authoritative source)
         tokenBalanceCache = (balance: balanceResponse.balance, timestamp: Date())
+        print("🧞 [API] Updated token balance cache from balance endpoint: \(balanceResponse.balance) tokens (authoritative source)")
         
         return balanceResponse
     }
@@ -941,6 +1029,12 @@ class GenieAPIService: ObservableObject {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        // Add Parse user ID header so Lambda can find the correct user
+        if let userId = getCurrentUserIdForAPI() {
+            print("🧞 [API] Adding X-User-Id header for setup intent: \(userId)")
+            request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        }
+        
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -957,6 +1051,66 @@ class GenieAPIService: ObservableObject {
         }
         
         return try JSONDecoder().decode(SetupIntentResponse.self, from: data)
+    }
+    
+    /// Retrieve payment method ID from setup intent after PaymentSheet completes
+    /// The setup intent client secret contains the setup intent ID which we can use to retrieve the payment method
+    /// Note: If the backend endpoint doesn't exist, this will return "default" and the backend should use the customer's default payment method
+    func retrievePaymentMethodFromSetupIntent(setupIntentClientSecret: String) async throws -> String {
+        // Extract setup intent ID from client secret (format: seti_xxx_secret_yyy)
+        let components = setupIntentClientSecret.split(separator: "_")
+        guard components.count >= 2 else {
+            print("⚠️ [API] Invalid setup intent client secret format")
+            return "default"
+        }
+        let setupIntentId = "\(components[0])_\(components[1])"
+        
+        guard let url = URL(string: "\(baseURL)/subscriptions/get-payment-method") else {
+            print("⚠️ [API] Invalid URL for payment method retrieval")
+            return "default"
+        }
+        
+        let token = try await getAuthToken()
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Add Parse user ID header
+        if let userId = getCurrentUserIdForAPI() {
+            request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        }
+        
+        let body = ["setupIntentId": setupIntentId]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("⚠️ [API] Invalid response when retrieving payment method")
+                return "default"
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                // If endpoint doesn't exist (404) or fails, backend should handle "default"
+                print("⚠️ [API] Payment method retrieval endpoint returned \(httpResponse.statusCode), using 'default'")
+                return "default"
+            }
+            
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let paymentMethodId = json["paymentMethodId"] as? String {
+                print("✅ [API] Retrieved payment method ID: \(paymentMethodId)")
+                return paymentMethodId
+            }
+            
+            print("⚠️ [API] Could not extract payment method ID from response, using 'default'")
+            return "default"
+        } catch {
+            // If endpoint doesn't exist or fails, backend should handle "default"
+            print("⚠️ [API] Error retrieving payment method: \(error.localizedDescription), using 'default'")
+            return "default"
+        }
     }
     
     // Create subscription with payment method ID (from Stripe PaymentSheet)

@@ -16,6 +16,14 @@ class WatchWorkoutCoordinator: ObservableObject {
     @Published var isHandoffInProgress = false
     @Published var handoffDirection: HandoffDirection?
     
+    // Device coordination flags - track which device is primary for each metric
+    var isWatchPrimaryForDistance = true  // Default: watch is primary until phone says otherwise
+    var isWatchPrimaryForPace = true
+    var isWatchPrimaryForHeartRate = true  // Watch is always better for HR
+    var isWatchPrimaryForCalories = true
+    var isWatchPrimaryForCadence = true
+    var isWatchPrimaryForElevation = false  // Phone GPS is better for elevation
+    
     private var cancellables = Set<AnyCancellable>()
     private let connectivityManager = WatchConnectivityManager.shared
     
@@ -33,7 +41,7 @@ class WatchWorkoutCoordinator: ObservableObject {
     
     // MARK: - Workout Management
     
-    func startWorkout(type: WorkoutType, isIndoor: Bool = false, isOpenTraining: Bool = false) {
+    func startWorkout(type: WorkoutType) {
         guard activeWorkout == nil else {
             print("⚠️ [WatchWorkoutCoordinator] Workout already active")
             return
@@ -45,36 +53,21 @@ class WatchWorkoutCoordinator: ObservableObject {
             deviceSource: .watch
         )
         
-        DispatchQueue.main.async {
-            self.activeWorkout = session
-        }
+        activeWorkout = session
         
         // Notify phone
-        var message: [String: Any] = [
+        connectivityManager.sendMessage([
             "type": "workoutStateChange",
             "workoutType": type.rawValue,
             "state": WorkoutState.starting.rawValue,
             "workoutId": session.id
-        ]
-        
-        // Add indoor/outdoor info for running
-        if type == .running {
-            message["isIndoor"] = isIndoor
-        }
-        
-        // Add open training info for gym
-        if type == .gym {
-            message["isOpenTraining"] = isOpenTraining
-        }
-        
-        connectivityManager.sendMessage(message)
+        ])
         
         // Special handling for gym workouts
         if type == .gym {
             connectivityManager.sendMessage([
                 "type": "gymWorkoutStart",
                 "workoutId": session.id,
-                "isOpenTraining": isOpenTraining,
                 "timestamp": Date().timeIntervalSince1970
             ])
         }
@@ -85,9 +78,7 @@ class WatchWorkoutCoordinator: ObservableObject {
         
         workout.state = .paused
         workout.lastUpdateDate = Date()
-        DispatchQueue.main.async {
-            self.activeWorkout = workout
-        }
+        activeWorkout = workout
         
         connectivityManager.sendMessage([
             "type": "workoutStateChange",
@@ -102,9 +93,7 @@ class WatchWorkoutCoordinator: ObservableObject {
         
         workout.state = .running
         workout.lastUpdateDate = Date()
-        DispatchQueue.main.async {
-            self.activeWorkout = workout
-        }
+        activeWorkout = workout
         
         connectivityManager.sendMessage([
             "type": "workoutStateChange",
@@ -119,9 +108,7 @@ class WatchWorkoutCoordinator: ObservableObject {
         
         workout.state = .stopping
         workout.lastUpdateDate = Date()
-        DispatchQueue.main.async {
-            self.activeWorkout = workout
-        }
+        activeWorkout = workout
         
         connectivityManager.sendMessage([
             "type": "workoutStateChange",
@@ -143,12 +130,74 @@ class WatchWorkoutCoordinator: ObservableObject {
         
         workout.metrics = metrics
         workout.lastUpdateDate = Date()
-        DispatchQueue.main.async {
-            self.activeWorkout = workout
+        activeWorkout = workout
+        
+        // Only send metrics that watch is primary for (aligned with phone's coordination system)
+        var metricsToSend: [String: Any] = [:]
+        
+        // Always send elapsed time (both devices need it)
+        metricsToSend["elapsedTime"] = metrics.elapsedTime
+        
+        // Only send metrics watch is primary for
+        if isWatchPrimaryForDistance {
+            metricsToSend["distance"] = metrics.distance
+        }
+        if isWatchPrimaryForPace {
+            metricsToSend["pace"] = metrics.pace
+        }
+        if isWatchPrimaryForHeartRate {
+            metricsToSend["heartRate"] = metrics.heartRate
+        }
+        if isWatchPrimaryForCalories {
+            metricsToSend["calories"] = metrics.calories
+        }
+        if isWatchPrimaryForCadence, let cadence = metrics.cadence {
+            metricsToSend["cadence"] = cadence
+        }
+        if isWatchPrimaryForElevation, let elevation = metrics.elevationGain {
+            metricsToSend["elevationGain"] = elevation
         }
         
-        // Sync metrics to phone
-        connectivityManager.sendMetrics(metrics.toDictionary(), workoutType: workout.workoutType.rawValue)
+        // Include coordination flags so phone knows which metrics to use
+        let message: [String: Any] = [
+            "type": "workoutMetrics",
+            "workoutType": workout.workoutType.rawValue,
+            "metrics": metricsToSend,
+            "isWatchPrimaryForDistance": isWatchPrimaryForDistance,
+            "isWatchPrimaryForPace": isWatchPrimaryForPace,
+            "isWatchPrimaryForHeartRate": isWatchPrimaryForHeartRate,
+            "isWatchPrimaryForCalories": isWatchPrimaryForCalories,
+            "isWatchPrimaryForCadence": isWatchPrimaryForCadence,
+            "isWatchPrimaryForElevation": isWatchPrimaryForElevation,
+            "timestamp": Date().timeIntervalSince1970
+        ]
+        
+        connectivityManager.sendMessage(message)
+    }
+    
+    // Update coordination flags from phone messages
+    func updateCoordinationFlags(from phoneMessage: [String: Any]) {
+        if let isPrimaryForDistance = phoneMessage["isPrimaryForDistance"] as? Bool {
+            isWatchPrimaryForDistance = !isPrimaryForDistance  // If phone is primary, watch is not
+        }
+        if let isPrimaryForPace = phoneMessage["isPrimaryForPace"] as? Bool {
+            isWatchPrimaryForPace = !isPrimaryForPace
+        }
+        if let isPrimaryForHeartRate = phoneMessage["isPrimaryForHeartRate"] as? Bool {
+            isWatchPrimaryForHeartRate = !isPrimaryForHeartRate
+        }
+        if let isPrimaryForCalories = phoneMessage["isPrimaryForCalories"] as? Bool {
+            isWatchPrimaryForCalories = !isPrimaryForCalories
+        }
+        if let isPrimaryForCadence = phoneMessage["isPrimaryForCadence"] as? Bool {
+            isWatchPrimaryForCadence = !isPrimaryForCadence
+        }
+        
+        // Heart rate: Watch is always better, but respect phone's flag for coordination
+        // Elevation: Phone GPS is always better
+        isWatchPrimaryForElevation = false
+        
+        print("⌚️ [WatchWorkoutCoordinator] Updated coordination flags - Distance: \(isWatchPrimaryForDistance), Pace: \(isWatchPrimaryForPace), HR: \(isWatchPrimaryForHeartRate)")
     }
     
     // MARK: - Handoff
@@ -159,10 +208,8 @@ class WatchWorkoutCoordinator: ObservableObject {
             return
         }
         
-        DispatchQueue.main.async {
-            self.isHandoffInProgress = true
-            self.handoffDirection = .watchToPhone
-        }
+        isHandoffInProgress = true
+        handoffDirection = .watchToPhone
         
         let handoffMessage = WorkoutHandoffMessage(
             direction: .watchToPhone,
@@ -215,9 +262,7 @@ class WatchWorkoutCoordinator: ObservableObject {
             deviceSource: .phone
         )
         
-        DispatchQueue.main.async {
-            self.activeWorkout = session
-        }
+        activeWorkout = session
         
         // Confirm handoff acceptance
         connectivityManager.sendMessage([
@@ -243,9 +288,7 @@ class WatchWorkoutCoordinator: ObservableObject {
             deviceSource: .phone
         )
         
-        DispatchQueue.main.async {
-            self.activeWorkout = session
-        }
+        activeWorkout = session
         
         connectivityManager.sendMessage([
             "type": "handoffResponse",

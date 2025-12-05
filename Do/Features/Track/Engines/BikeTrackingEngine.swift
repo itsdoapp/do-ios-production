@@ -2150,6 +2150,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     /// Initial setup to prepare the run tracker
     func setup() {
+        // Request permissions before starting (location and HealthKit including heart rate)
+        requestPermissions()
+        
         // Apply current run settings
         loadSettings()
         
@@ -2183,9 +2186,9 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         // Start the timer
         startTimer()
         
-        // Request location updates for outdoor runs
+        // Request location updates for outdoor runs (will be handled by ModernLocationManager)
         if !isIndoorMode {
-            locationManager.startUpdatingLocation()
+            locationManager.startTracking()
         }
         
         // Send updates to observers
@@ -2465,23 +2468,46 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     
     // Establish initial device coordination roles
-    private func establishDeviceCoordination() {
+     func establishDeviceCoordination() {
         guard bikeState != .notStarted else { return }
         
-        // For outdoor runs, determine based on GPS quality
+        // For outdoor biking, determine based on GPS quality
         isDashboardMode = false
+        let wasWatchTracking = isWatchTracking // Remember if watch was tracking before
+        
+        // If watch was tracking (e.g., we're joining a workout started on watch),
+        // we still want to check if phone has good GPS and can take over
+        let watchStartedWorkout = wasWatchTracking || isJoiningExistingWorkout
         
         // Check if we have good GPS data
         if hasGoodLocationData {
-            // Phone is primary for GPS-based metrics
+            // Phone is primary for GPS-based metrics (even if watch started the workout)
+            // Phone GPS is more accurate for outdoor distance/pace
             isPrimaryForDistance = true
             isPrimaryForPace = true
             isPrimaryForHeartRate = false // Watch still better for HR
             isPrimaryForCalories = true   // Phone can calculate calories with distance
             isPrimaryForCadence = false   // Watch better for cadence
             
-            print("📱 Outdoor run with good GPS: Phone primary for distance/pace")
-            print("⌚️ Watch primary for heart rate and cadence")
+            // If watch started the workout, we're now coordinating (not just dashboard)
+            if watchStartedWorkout {
+                isWatchTracking = false // Phone is now tracking GPS-based metrics
+                print("📱 Outdoor bike (joined from watch) with good GPS: Phone now primary for distance/pace")
+                print("⌚️ Watch primary for heart rate and cadence")
+                
+                // Re-evaluate GPS quality after a few seconds to ensure it's stable
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                    guard let self = self, self.bikeState.isActive else { return }
+                    // Re-check GPS quality and update coordination if it has degraded
+                    if !self.hasGoodLocationData && self.isPrimaryForDistance {
+                        print("📱 GPS quality degraded - re-establishing device coordination")
+                        self.establishDeviceCoordination()
+                    }
+                }
+            } else {
+                print("📱 Outdoor bike with good GPS: Phone primary for distance/pace")
+                print("⌚️ Watch primary for heart rate and cadence")
+            }
         } else {
             // Poor GPS quality, let watch take more metrics
             isPrimaryForDistance = false
@@ -2491,7 +2517,21 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             isPrimaryForCadence = false
             isWatchTracking = true
             
-            print("📱 Outdoor run with poor GPS: Deferring to watch for metrics")
+            if watchStartedWorkout {
+                print("📱 Outdoor bike (joined from watch) with poor GPS: Watch remains primary for metrics")
+            } else {
+                print("📱 Outdoor bike with poor GPS: Deferring to watch for metrics")
+            }
+            
+            // Re-evaluate GPS quality after a few seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                guard let self = self, self.bikeState.isActive else { return }
+                // If GPS improves, re-establish coordination
+                if self.hasGoodLocationData && self.isWatchTracking {
+                    print("📱 GPS improved - re-establishing device coordination")
+                    self.establishDeviceCoordination()
+                }
+            }
         }
         
         // Update metrics coordinator policy
@@ -3857,26 +3897,36 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
     
     private func requestPermissions() {
         // Request location permissions
-        // Use ModernLocationManager to avoid UI unresponsiveness warnings
-        ModernLocationManager.shared.requestWhenInUseAuthorization()
-        ModernLocationManager.shared.requestAlwaysAuthorization()
+        let locationStatus = locationManager.authorizationStatus
+        if locationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+        } else if locationStatus == .authorizedWhenInUse {
+            // Request "Always" authorization for background tracking
+            locationManager.requestAlwaysAuthorization()
+        }
         
-        // Request HealthKit permissions
+        // Request HealthKit permissions - ensure heart rate is included
         if HKHealthStore.isHealthDataAvailable() {
             let typesToShare: Set<HKSampleType> = [
                 HKObjectType.workoutType(),
+                HKQuantityType.quantityType(forIdentifier: .heartRate)!,
                 HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
                 HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)!
             ]
             
             let typesToRead: Set<HKObjectType> = [
+                HKObjectType.workoutType(),
                 HKObjectType.quantityType(forIdentifier: .heartRate)!,
+                HKObjectType.quantityType(forIdentifier: .activeEnergyBurned)!,
+                HKObjectType.quantityType(forIdentifier: .distanceWalkingRunning)!,
                 HKObjectType.quantityType(forIdentifier: .bodyMass)!
             ]
             
             healthStore.requestAuthorization(toShare: typesToShare, read: typesToRead) { (success, error) in
                 if let error = error {
-                    print("HealthKit authorization error: \(error.localizedDescription)")
+                    print("❌ HealthKit authorization error: \(error.localizedDescription)")
+                } else if success {
+                    print("✅ HealthKit authorization granted (including heart rate)")
                 }
             }
         }
@@ -4196,38 +4246,48 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
         }
         
         // Only update if auto tracking is disabled or we're specifically allowed to update
-        if !autoTrackingEnabled || allowExternalHeartRateUpdates {
-            // All of these property updates must happen on the main thread to avoid publishing errors
-            self.currentHeartRate = heartRate
-            self.heartRate = heartRate
-            self.formattedHeartRate = String(format: "%.0f", heartRate)
-            
-            // Store heart rate in the array of readings
-            if heartRateReadings.count >= 60 {
-                heartRateReadings.removeFirst()
-            }
-            heartRateReadings.append(heartRate)
-            
-            // Update heart rate zone
-            updateHeartRateZone()
-            
-            // Update calories if heart rate affects calculation
-            updateCaloriesBurned()
-            
-            // Only log meaningful heart rate changes or periodic updates
-            let now = Date()
-            let timeSinceLastLog = now.timeIntervalSince(lastHeartRateLogTime)
-            let heartRateChanged = abs(heartRate - lastLoggedHeartRate) >= 5
-            
-            if heartRateChanged || timeSinceLastLog >= 10.0 {
-                print("❤️ Heart rate updated: \(Int(heartRate)) bpm")
-                lastLoggedHeartRate = heartRate
-                lastHeartRateLogTime = now
-            }
-            
-            // Notify observers that heart rate has been updated
-            NotificationCenter.default.post(name: .heartRateUpdate, object: self, userInfo: ["heartRate": heartRate])
+        // This ensures consistency with other metrics (distance, cadence, calories) and allows
+        // the app to control whether external/watch-based heart rate should be used
+        guard !autoTrackingEnabled || allowExternalHeartRateUpdates else {
+            print("❤️ HEART RATE UPDATE BLOCKED - autoTracking: \(autoTrackingEnabled), allowExternal: \(allowExternalHeartRateUpdates), received: \(Int(heartRate))bpm")
+            return
         }
+        
+        print("❤️ HEART RATE UPDATE ACCEPTED - Old: \(Int(self.heartRate))bpm, New: \(Int(heartRate))bpm, autoTracking: \(autoTrackingEnabled), allowExternal: \(allowExternalHeartRateUpdates)")
+        
+        // All of these property updates must happen on the main thread to avoid publishing errors
+        self.currentHeartRate = heartRate
+        self.heartRate = heartRate
+        self.formattedHeartRate = String(format: "%.0f", heartRate)
+        
+        // Store heart rate in the array of readings
+        if heartRateReadings.count >= 60 {
+            heartRateReadings.removeFirst()
+        }
+        heartRateReadings.append(heartRate)
+        
+        // Update heart rate metrics (average, max, etc.)
+        updateHeartRateMetrics(heartRate)
+        
+        // Update heart rate zone
+        updateHeartRateZone()
+        
+        // Update calories if heart rate affects calculation
+        updateCaloriesBurned()
+        
+        // Only log meaningful heart rate changes or periodic updates
+        let now = Date()
+        let timeSinceLastLog = now.timeIntervalSince(lastHeartRateLogTime)
+        let heartRateChanged = abs(heartRate - lastLoggedHeartRate) >= 5
+        
+        if heartRateChanged || timeSinceLastLog >= 10.0 {
+            print("❤️ Heart rate updated: \(Int(heartRate)) bpm")
+            lastLoggedHeartRate = heartRate
+            lastHeartRateLogTime = now
+        }
+        
+        // Notify observers that heart rate has been updated
+        NotificationCenter.default.post(name: .heartRateUpdate, object: self, userInfo: ["heartRate": heartRate])
     }
     
     // MARK: - External Metric Updates
@@ -5301,14 +5361,14 @@ private func formatPaceFromSeconds(_ seconds: Double) -> String {
             let currentIsPrimaryForCalories = self.isPrimaryForCalories
             let currentIsPrimaryForCadence = self.isPrimaryForCadence
             
-            // Prepare metrics for the watch
+            // Prepare metrics for the watch - only send metrics that phone is primary for
             let metrics: [String: Any] = [
-                "distance": currentDistance,
-                "pace": currentPace,
-                "elapsedTime": currentElapsedTime,
-                "calories": currentCalories,
-                "heartRate": currentHeartRate,
-                "cadence": currentCadence,
+                "distance": currentIsPrimaryForDistance ? currentDistance : 0,
+                "pace": currentIsPrimaryForPace ? currentPace : 0,
+                "elapsedTime": currentElapsedTime,  // Always send elapsed time
+                "calories": currentIsPrimaryForCalories ? currentCalories : 0,
+                "heartRate": currentIsPrimaryForHeartRate ? currentHeartRate : 0,
+                "cadence": currentIsPrimaryForCadence ? currentCadence : 0,
                 "timestamp": Date().timeIntervalSince1970
             ]
             

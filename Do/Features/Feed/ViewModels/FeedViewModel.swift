@@ -240,6 +240,136 @@ class FeedViewModel: ObservableObject {
         return userInteractions[postId]
     }
     
+    /// Delete a post from the feed
+    func deletePost(postId: String) async {
+        guard let userId = currentUserId else {
+            print("⚠️ [FeedVM] Cannot delete post - no user ID")
+            return
+        }
+        
+        print("🗑️ [FeedVM] Deleting post: \(postId)")
+        
+        do {
+            // Delete from backend
+            let success = try await FeedAPIService.shared.deletePost(postId: postId, userId: userId)
+            
+            if success {
+                // Remove from local array
+                await MainActor.run {
+                    self.posts.removeAll { $0.objectId == postId }
+                    
+                    // Clear from cache
+                    cacheManager.removePost(postId: postId)
+                    
+                    // Remove interaction tracking
+                    self.userInteractions.removeValue(forKey: postId)
+                    
+                    print("✅ [FeedVM] Post deleted successfully from feed")
+                }
+            } else {
+                throw NSError(domain: "FeedError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Delete failed"])
+            }
+        } catch {
+            print("❌ [FeedVM] Error deleting post: \(error)")
+            await MainActor.run {
+                self.error = "Failed to delete post"
+            }
+        }
+    }
+    
+    /// Hide a post from the feed (removes it from view but doesn't delete)
+    func hidePost(postId: String) async {
+        guard let userId = currentUserId else {
+            print("⚠️ [FeedVM] Cannot hide post - no user ID")
+            return
+        }
+        print("👁️ [FeedVM] Hiding post: \(postId)")
+        
+        // Remove from local array immediately (optimistic update)
+        await MainActor.run {
+            self.posts.removeAll { $0.objectId == postId }
+            // Remove interaction tracking
+            self.userInteractions.removeValue(forKey: postId)
+        }
+        
+        do {
+            // Call API to hide post on backend
+            let success = try await FeedAPIService.shared.hidePost(postId: postId, userId: userId)
+            if success {
+                print("✅ [FeedVM] Post hidden successfully")
+            } else {
+                throw NSError(domain: "FeedError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Hide failed"])
+            }
+        } catch {
+            print("❌ [FeedVM] Error hiding post: \(error)")
+            await MainActor.run {
+                self.error = "Failed to hide post"
+            }
+        }
+    }
+    
+    /// Archive a post (removes it from feed but keeps it in user's archive)
+    func archivePost(postId: String) async {
+        guard let userId = currentUserId else {
+            print("⚠️ [FeedVM] Cannot archive post - no user ID")
+            return
+        }
+        print("📦 [FeedVM] Archiving post: \(postId)")
+        
+        // Remove from local array immediately (optimistic update)
+        await MainActor.run {
+            self.posts.removeAll { $0.objectId == postId }
+            // Remove interaction tracking
+            self.userInteractions.removeValue(forKey: postId)
+        }
+        
+        do {
+            // Call API to archive post on backend
+            let success = try await FeedAPIService.shared.archivePost(postId: postId, userId: userId)
+            if success {
+                print("✅ [FeedVM] Post archived successfully")
+            } else {
+                throw NSError(domain: "FeedError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Archive failed"])
+            }
+        } catch {
+            print("❌ [FeedVM] Error archiving post: \(error)")
+            await MainActor.run {
+                self.error = "Failed to archive post"
+            }
+        }
+    }
+    
+    /// Report a post for inappropriate content
+    func reportPost(postId: String, reason: String? = nil) async {
+        guard let userId = currentUserId else {
+            print("⚠️ [FeedVM] Cannot report post - no user ID")
+            return
+        }
+        print("🚨 [FeedVM] Reporting post: \(postId), reason: \(reason ?? "No reason provided")")
+        
+        // Remove from local array immediately (optimistic update)
+        await MainActor.run {
+            self.posts.removeAll { $0.objectId == postId }
+            // Remove interaction tracking
+            self.userInteractions.removeValue(forKey: postId)
+        }
+        
+        do {
+            // Call API to report post on backend
+            let success = try await FeedAPIService.shared.reportPost(postId: postId, userId: userId, reason: reason)
+            if success {
+                print("✅ [FeedVM] Post reported successfully")
+            } else {
+                throw NSError(domain: "FeedError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Report failed"])
+            }
+        } catch {
+            print("❌ [FeedVM] Error reporting post: \(error)")
+            await MainActor.run {
+                self.error = "Failed to report post"
+            }
+        }
+    }
+    
     /// Check if should prefetch more posts
     func shouldPrefetch(currentIndex: Int) -> Bool {
         let shouldLoad = currentIndex >= posts.count - prefetchThreshold && hasMorePages && !isLoadingMore && !isLoading

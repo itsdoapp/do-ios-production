@@ -634,34 +634,52 @@ enum MeditationCharacterType {
 struct SleepCharacter: View {
     var body: some View {
         ZStack {
-            // Head
+            // Head - Soft purple tint for sleep
             Circle()
-                .fill(Color.white.opacity(0.9))
+                .fill(Color(hex: "E6E6FA").opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Closed eyes (sleepy)
-            HStack(spacing: 8) {
-                Capsule()
-                    .fill(Color.black.opacity(0.3))
-                    .frame(width: 8, height: 3)
-                    .offset(x: -8)
-                Capsule()
-                    .fill(Color.black.opacity(0.3))
-                    .frame(width: 8, height: 3)
-                    .offset(x: 8)
+            // Closed eyes (curved downwards for deep sleep)
+            HStack(spacing: 10) {
+                Circle()
+                    .trim(from: 0.5, to: 1.0)
+                    .stroke(Color.black.opacity(0.4), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 10, height: 10)
+                    .rotationEffect(.degrees(180))
+                Circle()
+                    .trim(from: 0.5, to: 1.0)
+                    .stroke(Color.black.opacity(0.4), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 10, height: 10)
+                    .rotationEffect(.degrees(180))
             }
             
-            // Sleepy mouth (small smile)
-            Capsule()
-                .fill(Color.black.opacity(0.2))
-                .frame(width: 12, height: 2)
+            // Small peaceful mouth
+            Circle()
+                .trim(from: 0.1, to: 0.4)
+                .stroke(Color.black.opacity(0.2), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .frame(width: 10, height: 10)
+                .rotationEffect(.degrees(180))
                 .offset(y: 8)
             
-            // Moon above head
+            // Zzz floating elements
+            VStack(spacing: 2) {
+                Text("z")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundColor(Color(hex: "9B87F5"))
+                    .offset(x: 15, y: -25)
+                Text("z")
+                    .font(.system(size: 6, weight: .bold, design: .rounded))
+                    .foregroundColor(Color(hex: "9B87F5").opacity(0.7))
+                    .offset(x: 22, y: -28)
+            }
+            
+            // Moon badge
             Image(systemName: "moon.fill")
-                .font(.system(size: 12))
-                .foregroundColor(Color("FFD700").opacity(0.8))
-                .offset(y: -35)
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: "FFD700"))
+                .padding(4)
+                .background(Circle().fill(Color.white).shadow(radius: 1))
+                .offset(x: -18, y: -18)
         }
     }
 }
@@ -669,32 +687,43 @@ struct SleepCharacter: View {
 struct FocusCharacter: View {
     var body: some View {
         ZStack {
-            // Head
+            // Head - Alert orange tint
             Circle()
-                .fill(Color.white.opacity(0.9))
+                .fill(Color(hex: "FFF0E0").opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Focused eyes (wide open)
+            // Focused eyes with pupils
             HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.black.opacity(0.6))
-                    .frame(width: 10, height: 10)
-                Circle()
-                    .fill(Color.black.opacity(0.6))
-                    .frame(width: 10, height: 10)
+                ZStack {
+                    Circle().fill(Color.white).frame(width: 14, height: 14)
+                    Circle().fill(Color.black.opacity(0.8)).frame(width: 6, height: 6)
+                }
+                ZStack {
+                    Circle().fill(Color.white).frame(width: 14, height: 14)
+                    Circle().fill(Color.black.opacity(0.8)).frame(width: 6, height: 6)
+                }
             }
             
-            // Determined mouth
+            // Determined mouth (straight line)
             Capsule()
                 .fill(Color.black.opacity(0.3))
-                .frame(width: 14, height: 3)
+                .frame(width: 12, height: 2)
                 .offset(y: 10)
             
-            // Lightbulb above (idea/insight)
-            Image(systemName: "lightbulb.fill")
-                .font(.system(size: 14))
+            // Glasses rim (intellectual look)
+            HStack(spacing: 0) {
+                Circle().stroke(Color.black.opacity(0.2), lineWidth: 1.5).frame(width: 18, height: 18)
+                Rectangle().fill(Color.black.opacity(0.2)).frame(width: 6, height: 1.5)
+                Circle().stroke(Color.black.opacity(0.2), lineWidth: 1.5).frame(width: 18, height: 18)
+            }
+            
+            // Target icon badge
+            Image(systemName: "scope")
+                .font(.system(size: 10))
                 .foregroundColor(Color.brandOrange)
-                .offset(y: -38)
+                .padding(4)
+                .background(Circle().fill(Color.white).shadow(radius: 1))
+                .offset(x: 18, y: -18)
         }
     }
 }
@@ -702,77 +731,90 @@ struct FocusCharacter: View {
 struct StressReliefCharacter: View {
     var body: some View {
         ZStack {
-            // Head
+            // Head - Calming teal tint
             Circle()
-                .fill(Color.white.opacity(0.9))
+                .fill(Color(hex: "E0F7FA").opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Relaxed eyes
-            HStack(spacing: 12) {
-                Capsule()
-                    .fill(Color.black.opacity(0.4))
-                    .frame(width: 10, height: 3)
-                    .rotationEffect(.degrees(-20))
-                Capsule()
-                    .fill(Color.black.opacity(0.4))
-                    .frame(width: 10, height: 3)
-                    .rotationEffect(.degrees(20))
-            }
-            
-            // Gentle smile
-            Capsule()
-                .fill(Color.black.opacity(0.3))
-                .frame(width: 16, height: 3)
-                .offset(y: 8)
-            
-            // Waves around (calm)
-            ForEach(0..<3) { index in
+            // Relieved closed eyes (curved upwards)
+            HStack(spacing: 14) {
                 Circle()
-                    .stroke(Color.white.opacity(0.3), lineWidth: 2)
-                    .frame(width: 60 + CGFloat(index * 8))
+                    .trim(from: 0.5, to: 1.0)
+                    .stroke(Color.black.opacity(0.5), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 12, height: 12)
+                Circle()
+                    .trim(from: 0.5, to: 1.0)
+                    .stroke(Color.black.opacity(0.5), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 12, height: 12)
             }
+            .offset(y: 2)
+            
+            // Exhaling mouth
+            Circle()
+                .fill(Color.black.opacity(0.1))
+                .frame(width: 8, height: 8)
+                .offset(y: 12)
+            
+            // Sweat drop (relief) - fading away
+            Image(systemName: "drop.fill")
+                .font(.system(size: 8))
+                .foregroundColor(Color.blue.opacity(0.4))
+                .offset(x: 18, y: -5)
+                .rotationEffect(.degrees(15))
+            
+            // Lotus badge
+            Image(systemName: "leaf.fill")
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: "4ECDC4"))
+                .padding(4)
+                .background(Circle().fill(Color.white).shadow(radius: 1))
+                .offset(x: -18, y: -18)
         }
     }
 }
 
 struct BreathingCharacter: View {
-    @State private var scale: CGFloat = 1.0
+    @State private var breathScale: CGFloat = 1.0
     
     var body: some View {
         ZStack {
+            // Breath aura
+            Circle()
+                .fill(Color(hex: "87CEEB").opacity(0.3))
+                .frame(width: 60, height: 60)
+                .scaleEffect(breathScale)
+            
             // Head
             Circle()
-                .fill(Color.white.opacity(0.9))
+                .fill(Color.white.opacity(0.95))
                 .frame(width: 50, height: 50)
-                .scaleEffect(scale)
             
-            // Simple eyes
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.black.opacity(0.5))
-                    .frame(width: 8, height: 8)
-                Circle()
-                    .fill(Color.black.opacity(0.5))
-                    .frame(width: 8, height: 8)
+            // Serene eyes
+            HStack(spacing: 14) {
+                Capsule()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 10, height: 2.5)
+                Capsule()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 10, height: 2.5)
             }
             
-            // Open mouth (breathing)
-            Ellipse()
-                .fill(Color.black.opacity(0.2))
-                .frame(width: 12, height: 8)
+            // Round mouth blowing air
+            Circle()
+                .stroke(Color.black.opacity(0.2), lineWidth: 1.5)
+                .frame(width: 6, height: 6)
                 .offset(y: 10)
             
-            // Breath circles
-            ForEach(0..<2) { index in
-                Circle()
-                    .stroke(Color.white.opacity(0.4), lineWidth: 2)
-                    .frame(width: 40 + CGFloat(index * 10))
-                    .scaleEffect(scale)
+            // Wind lines
+            HStack(spacing: 2) {
+                Capsule().fill(Color(hex: "87CEEB")).frame(width: 6, height: 2)
+                Capsule().fill(Color(hex: "87CEEB")).frame(width: 4, height: 2)
             }
+            .offset(x: 12, y: 10)
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 3.0).repeatForever(autoreverses: true)) {
-                scale = 1.2
+            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                breathScale = 1.15
             }
         }
     }
@@ -781,34 +823,44 @@ struct BreathingCharacter: View {
 struct GratitudeCharacter: View {
     var body: some View {
         ZStack {
-            // Head
+            // Head - Warm yellow tint
             Circle()
-                .fill(Color.white.opacity(0.9))
+                .fill(Color(hex: "FFFDE7").opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Happy eyes
+            // Happy eyes (arches)
             HStack(spacing: 12) {
-                Capsule()
-                    .fill(Color.black.opacity(0.4))
-                    .frame(width: 10, height: 3)
-                    .rotationEffect(.degrees(-20))
-                Capsule()
-                    .fill(Color.black.opacity(0.4))
-                    .frame(width: 10, height: 3)
-                    .rotationEffect(.degrees(20))
+                Circle()
+                    .trim(from: 0.5, to: 1.0)
+                    .stroke(Color.black.opacity(0.6), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 10, height: 10)
+                Circle()
+                    .trim(from: 0.5, to: 1.0)
+                    .stroke(Color.black.opacity(0.6), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .frame(width: 10, height: 10)
             }
+            .offset(y: 2)
             
-            // Big smile
-            Capsule()
-                .fill(Color.black.opacity(0.3))
-                .frame(width: 20, height: 4)
-                .offset(y: 10)
+            // Big warm smile
+            Circle()
+                .trim(from: 0.0, to: 0.5)
+                .stroke(Color.black.opacity(0.6), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 16, height: 16)
+                .offset(y: 6)
             
-            // Heart above
+            // Rosy cheeks
+            HStack(spacing: 24) {
+                Circle().fill(Color.pink.opacity(0.3)).frame(width: 8, height: 8)
+                Circle().fill(Color.pink.opacity(0.3)).frame(width: 8, height: 8)
+            }
+            .offset(y: 8)
+            
+            // Floating heart
             Image(systemName: "heart.fill")
                 .font(.system(size: 12))
-                .foregroundColor(Color("FF6B6B"))
-                .offset(y: -35)
+                .foregroundColor(Color(hex: "FF6B6B"))
+                .offset(y: -32)
+                .shadow(color: Color.red.opacity(0.2), radius: 2, x: 0, y: 2)
         }
     }
 }
@@ -821,27 +873,41 @@ struct PerformanceCharacter: View {
                 .fill(Color.white.opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Energetic eyes
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.black.opacity(0.6))
-                    .frame(width: 10, height: 10)
-                Circle()
-                    .fill(Color.black.opacity(0.6))
-                    .frame(width: 10, height: 10)
+            // Determined eyes (slanted inwards)
+            HStack(spacing: 10) {
+                Capsule()
+                    .fill(Color.black.opacity(0.7))
+                    .frame(width: 12, height: 3)
+                    .rotationEffect(.degrees(15))
+                Capsule()
+                    .fill(Color.black.opacity(0.7))
+                    .frame(width: 12, height: 3)
+                    .rotationEffect(.degrees(-15))
             }
+            .offset(y: 2)
             
-            // Confident smile
-            Capsule()
-                .fill(Color.black.opacity(0.3))
-                .frame(width: 18, height: 3)
-                .offset(y: 10)
+            // Smirk
+            Path { path in
+                path.move(to: CGPoint(x: 20, y: 35))
+                path.addQuadCurve(to: CGPoint(x: 30, y: 33), control: CGPoint(x: 25, y: 38))
+            }
+            .stroke(Color.black.opacity(0.6), lineWidth: 2)
+            .frame(width: 50, height: 50)
             
-            // Lightning bolt (energy)
+            // Sweatband
+            Rectangle()
+                .fill(Color.brandOrange)
+                .frame(width: 48, height: 6)
+                .cornerRadius(2)
+                .offset(y: -12)
+            
+            // Lightning bolt badge
             Image(systemName: "bolt.fill")
-                .font(.system(size: 14))
-                .foregroundColor(Color("FFD700"))
-                .offset(y: -38)
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: "FFD700"))
+                .padding(4)
+                .background(Circle().fill(Color.white).shadow(radius: 1))
+                .offset(x: 18, y: -18)
         }
     }
 }
@@ -849,32 +915,40 @@ struct PerformanceCharacter: View {
 struct RecoveryCharacter: View {
     var body: some View {
         ZStack {
-            // Head
+            // Head - Mint green tint
             Circle()
-                .fill(Color.white.opacity(0.9))
+                .fill(Color(hex: "F0FFF4").opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Gentle eyes
-            HStack(spacing: 12) {
+            // Gentle closed eyes
+            HStack(spacing: 14) {
                 Capsule()
                     .fill(Color.black.opacity(0.4))
-                    .frame(width: 8, height: 3)
+                    .frame(width: 10, height: 2)
                 Capsule()
                     .fill(Color.black.opacity(0.4))
-                    .frame(width: 8, height: 3)
+                    .frame(width: 10, height: 2)
             }
             
-            // Soft smile
-            Capsule()
-                .fill(Color.black.opacity(0.3))
-                .frame(width: 14, height: 3)
+            // Small smile
+            Circle()
+                .trim(from: 0.05, to: 0.45)
+                .stroke(Color.black.opacity(0.3), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .frame(width: 12, height: 12)
                 .offset(y: 8)
             
-            // Leaf (healing/nature)
+            // Band-aid visual metaphor (healing) on forehead
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color.pink.opacity(0.3))
+                .frame(width: 12, height: 4)
+                .rotationEffect(.degrees(-10))
+                .offset(x: -10, y: -15)
+            
+            // Floating leaf
             Image(systemName: "leaf.fill")
-                .font(.system(size: 12))
-                .foregroundColor(Color("4ECDC4"))
-                .offset(y: -35)
+                .font(.system(size: 10))
+                .foregroundColor(Color(hex: "4ECDC4"))
+                .offset(x: 18, y: 15)
         }
     }
 }
@@ -887,32 +961,33 @@ struct MindfulnessCharacter: View {
                 .fill(Color.white.opacity(0.9))
                 .frame(width: 50, height: 50)
             
-            // Balanced eyes
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(Color.black.opacity(0.5))
-                    .frame(width: 9, height: 9)
-                Circle()
-                    .fill(Color.black.opacity(0.5))
-                    .frame(width: 9, height: 9)
-            }
+            // Third eye dot (chakra)
+            Circle()
+                .fill(Color.purple.opacity(0.5))
+                .frame(width: 4, height: 4)
+                .offset(y: -8)
             
-            // Neutral, peaceful mouth
+            // Balanced open eyes
+            HStack(spacing: 14) {
+                Circle()
+                    .fill(Color.black.opacity(0.6))
+                    .frame(width: 6, height: 6)
+                Circle()
+                    .fill(Color.black.opacity(0.6))
+                    .frame(width: 6, height: 6)
+            }
+            .offset(y: 2)
+            
+            // Neutral smile
             Capsule()
                 .fill(Color.black.opacity(0.3))
-                .frame(width: 12, height: 2)
-                .offset(y: 10)
+                .frame(width: 10, height: 2)
+                .offset(y: 12)
             
-            // Sparkles (mindfulness)
-            ForEach(0..<3) { index in
-                Image(systemName: "sparkle")
-                    .font(.system(size: 8))
-                    .foregroundColor(Color.white.opacity(0.6))
-                    .offset(
-                        x: cos(Double(index) * 2 * .pi / 3) * 25,
-                        y: sin(Double(index) * 2 * .pi / 3) * 25
-                    )
-            }
+            // Halo/Aura ring
+            Circle()
+                .stroke(Color(hex: "B19CD9").opacity(0.3), lineWidth: 2)
+                .frame(width: 60, height: 60)
         }
     }
 }

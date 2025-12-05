@@ -274,8 +274,12 @@ extension WorkoutCommunicationHandler: WCSessionDelegate {
            let foods = try? JSONDecoder().decode([WatchFoodEntryData].self, from: foodData) {
             // Filter foods for today
             let todayFoods = foods.filter { food in
-                guard let timestampString = food.timestamp,
-                      let timestamp = ISO8601DateFormatter().date(from: timestampString) else {
+                guard let timestampString = food.timestamp else {
+                    return false
+                }
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                guard let timestamp = formatter.date(from: timestampString) else {
                     return false
                 }
                 return timestamp >= startOfDay && timestamp <= now

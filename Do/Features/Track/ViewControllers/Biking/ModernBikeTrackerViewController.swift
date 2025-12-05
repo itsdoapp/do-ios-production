@@ -363,12 +363,6 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
             object: nil
         )
         
-        // Fetch initial weather data and routes
-        Task {
-            await loadWeatherData()
-            await fetchRoutes()
-            await loadBikeHistory()
-        }
         NotificationCenter.default.addObserver(self, selector: #selector(didUpdateNearbyTrails(_:)), name: .didUpdateNearbyTrails, object: nil)
     }
 
@@ -410,6 +404,9 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         
+        // End initial load timer immediately - view is now visible
+        PerformanceLogger.end("Track:initialLoad", extra: "view appeared")
+        
         // Check and update hosting controller
         if let hostingView = hostingController?.view {
             // Find and configure scroll views
@@ -419,6 +416,60 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
         // Check for active watch workouts when the view appears
         print("📱 DIAGNOSTIC: ViewDidAppear called, checking for watch workouts...")
         checkForActiveWatchWorkouts()
+        
+        // Show cached data immediately if available
+        showCachedDataIfAvailable()
+        
+        // Load fresh data in background (non-blocking)
+        if !hasLoadedInitialData {
+            Task {
+                // Load weather and routes in parallel for faster loading
+                async let weatherTask = loadWeatherData()
+                async let routesTask = fetchRoutes()
+                
+                // Wait for weather and routes (critical for UI)
+                await weatherTask
+                await routesTask
+                
+                // Load history in background (non-critical, can be deferred)
+                Task.detached(priority: .utility) {
+                    await MainActor.run {
+                        self.loadBikeHistory()
+                    }
+                }
+            }
+            hasLoadedInitialData = true
+        }
+    }
+    
+    private var hasLoadedInitialData = false
+    
+    /// Show cached weather and routes data immediately if available
+    private func showCachedDataIfAvailable() {
+        // Show cached weather if available and still valid
+        if let cachedWeather = weatherService.currentWeather,
+           let lastLocation = weatherService.lastLocation,
+           let lastFetchTime = weatherService.lastWeatherFetchTime,
+           Date().timeIntervalSince(lastFetchTime) < 3600, // Less than 1 hour old
+           let currentLocation = locationManager.location,
+           currentLocation.distance(from: lastLocation) < 1000 { // Within 1km
+            print("📦 Showing cached weather data immediately")
+            weatherCondition = cachedWeather.condition
+            temperature = cachedWeather.temperature
+            humidity = cachedWeather.humidity
+            windSpeed = cachedWeather.windSpeed
+            let isNight = Calendar.current.component(.hour, from: Date()) < 6 || Calendar.current.component(.hour, from: Date()) > 18
+            weatherIconName = getWeatherIcon(for: cachedWeather.condition, isNight: isNight)
+            forecastDescription = generateForecastDescription(cachedWeather)
+            weatherDataLoaded = true
+        }
+        
+        // Show cached routes if available
+        if !RoutePlanner.shared.nearbyTrails.isEmpty {
+            print("📦 Showing \(RoutePlanner.shared.nearbyTrails.count) cached routes")
+            hasLoadedRoutes = true
+            routesForceRefreshID = UUID()
+        }
     }
     
     // New helper method to configure scroll views
@@ -491,9 +542,13 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     public func loadWeatherData() async {
         print("📱 ModernRunTrackerViewController: Starting weather data loading")
         
-        // Initialize weather state
-            await MainActor.run {
-            self.weatherDataLoaded = false
+        // Initialize weather state - but preserve existing weather data to avoid losing animation
+        await MainActor.run {
+            // Only reset weatherDataLoaded if we don't have any weather data yet
+            // This prevents the animation from disappearing when refreshing weather
+            if !self.weatherDataLoaded || self.weatherCondition == .unknown {
+                self.weatherDataLoaded = false
+            }
             self.forecastDescription = "Checking forecast..."
             
             // Set loading state but don't reset temperature to avoid flicker if we have data
@@ -551,9 +606,17 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
                         self.forecastDescription = "Weather data unavailable"
                     }
                     
-                    // Show weather view with error message
+                    // Preserve existing weather condition if we have one, otherwise set to clear as fallback
+                    // This prevents the animation from disappearing on error
+                    if self.weatherCondition == .unknown {
+                        self.weatherCondition = .clear // Default to clear instead of unknown
+                    }
+                    
+                    // Show weather view with error message (preserve existing data)
                     self.weatherDataLoaded = true
-                    self.weatherIconName = "exclamationmark.triangle"
+                    if self.weatherIconName.isEmpty {
+                        self.weatherIconName = "exclamationmark.triangle"
+                    }
                 }
             }
         } else {
@@ -561,8 +624,14 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
             await MainActor.run {
                 self.locationCity = "Location services unavailable"
                 self.forecastDescription = "Weather data unavailable"
+                // Preserve existing weather condition if we have one
+                if self.weatherCondition == .unknown {
+                    self.weatherCondition = .clear // Default to clear instead of unknown
+                }
                 self.weatherDataLoaded = true
-                self.weatherIconName = "location.slash"
+                if self.weatherIconName.isEmpty {
+                    self.weatherIconName = "location.slash"
+                }
             }
         }
     }
@@ -1036,6 +1105,7 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     // Add a cache for routes
     private var cachedRoutes: [String: [Trail]] = [:]
     private var lastRouteLoadTime: Date?
+    private var lastRouteLoadLocation: CLLocation?
     private var retryCount = 0
     private let maxRetries = 3
     private var isFetchingRoutes = false // Flag to prevent concurrent fetches
@@ -1090,11 +1160,25 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     func fetchRoutes(forceRefresh: Bool = false) {
         let routePlanner = RoutePlanner.shared
         
-        // Skip if we already have routes and aren't forcing refresh
+        // Always fetch fresh routes when switching categories or if force refresh is requested
+        // Don't skip if we have routes - they might be from a different category
         if !forceRefresh && !routePlanner.nearbyTrails.isEmpty {
-            print("✓ Using cached routes - \(routePlanner.nearbyTrails.count) routes available")
-            hasLoadedRoutes = true
-            return
+            // Check if routes are recent (less than 5 minutes old) and location hasn't changed much
+            // If so, we can use cached routes, otherwise fetch fresh ones
+            if let lastLoadTime = lastRouteLoadTime,
+               Date().timeIntervalSince(lastLoadTime) < 300, // Less than 5 minutes
+               let currentLocation = locationManager.location {
+                // Check if location hasn't changed significantly (within 500m)
+                if let cachedLocation = lastRouteLoadLocation,
+                   currentLocation.distance(from: cachedLocation) < 500 {
+                    print("✓ Using cached routes - \(routePlanner.nearbyTrails.count) routes available (recent & same location)")
+                    hasLoadedRoutes = true
+                    return
+                }
+            }
+            // Routes exist but are stale or location changed - clear and fetch fresh
+            print("🔄 Routes exist but are stale or location changed - fetching fresh routes")
+            routePlanner.clearTrails()
         }
         
         print("🔄 Fetching routes...")
@@ -1119,14 +1203,32 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
         
         // Now fetch the routes (this uses a cached location if one isn't available)
         Task {
-            // Use the proper find method that exists in RoutePlanner
-            routePlanner.findRunningTrails { [weak self] success in
+            // Ensure we have a location before fetching
+            if locationManager.location == nil {
+                print("📍 Location not ready yet, waiting 1 second before fetching routes...")
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // Wait 1 second
+            }
+            
+            // Use the bike-specific find method (now uses unified findTrailsForActivity)
+            routePlanner.findBikeFriendlyTrails(radius: 10000) { [weak self] success in
                 guard let self = self else { return }
                 
                 // Update UI on main thread
                 DispatchQueue.main.async {
                     // Mark routes as loaded first
                     self.hasLoadedRoutes = true
+                    
+                    // Update cache timestamp and location
+                    self.lastRouteLoadTime = Date()
+                    self.lastRouteLoadLocation = self.locationManager.location
+                    
+                    // Log the result
+                    let trailCount = routePlanner.nearbyTrails.count
+                    if trailCount > 0 {
+                        print("✅ Successfully loaded \(trailCount) bike routes")
+                    } else {
+                        print("⚠️ No bike routes found (success: \(success))")
+                    }
                     
                     // Force refresh IDs to ensure SwiftUI updates
                     self.routesForceRefreshID = UUID()
@@ -1701,6 +1803,12 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     // MARK: - Settings Observer
     
     private func observePreferencesChanges() {
+        // Initialize tracked preference value
+        if let savedTypeString = UserDefaults.standard.string(forKey: "selectedBikeType"),
+           let savedType = BikeType(rawValue: savedTypeString) {
+            previousBikeType = savedType
+        }
+        
         // Observe when user preferences change
         NotificationCenter.default.addObserver(
             self,
@@ -1712,9 +1820,22 @@ class ModernBikeTrackerViewController:  UIViewController, ObservableObject, CLLo
     
     // Add a debouncing mechanism
     private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousBikeType: BikeType?
     
     @objc private func userPreferencesDidChange() {
-        print("🔄 User preferences changed notification received")
+        // Check if the actual preference key changed before processing
+        let currentBikeTypeString = UserDefaults.standard.string(forKey: "selectedBikeType")
+        let currentBikeType = currentBikeTypeString.flatMap { BikeType(rawValue: $0) }
+        
+        // Only process if the preference actually changed
+        guard currentBikeType != previousBikeType else {
+            // Not a preference change we care about - ignore
+            return
+        }
+        
+        // Update tracked value
+        previousBikeType = currentBikeType
         
         // Cancel any existing timer
         preferencesDebounceTimer?.invalidate()
@@ -2986,8 +3107,12 @@ struct BikeTrackerView: View {
             FindRoutesView()
         }
         .onAppear {
-            // First request location access
-            locationManager.requestWhenInUseAuthorization()
+            // First request location access if needed
+            let status = CLLocationManager.authorizationStatus()
+            if status == .notDetermined {
+                print("📱 Requesting location authorization in FindRoutesView...")
+                locationManager.manager.requestWhenInUseAuthorization()
+            }
             
             // Load weather with a slight delay to ensure location is available
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -3690,6 +3815,8 @@ struct BikeTrackerView: View {
                         showRoutePreview = false
                     }
                 )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
         }
     }
@@ -4229,7 +4356,22 @@ struct BikeTrackerView: View {
                         }
                     }
                 case .partlyCloudy:
-                    CloudOverlay(nightMode: isNighttime(), cloudiness: .partial)
+                    if isNighttime() {
+                        PartlyCloudyNightView()
+                    } else {
+                        // Time of day variations for partly cloudy day
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            PartlyCloudyMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            PartlyCloudyEveningView()
+                        } else {
+                            // Regular daytime
+                            PartlyCloudyDayView()
+                        }
+                    }
                 case .cloudy:
                     CloudOverlay(nightMode: isNighttime())
                 case .rainy:
@@ -4242,15 +4384,25 @@ struct BikeTrackerView: View {
                     ModernFogOverlay(nightMode: isNighttime())
                 case .windy:
                     WindyOverlay(nightMode: isNighttime())
-                default:
-                    EmptyView()
+                case .unknown:
+                    // Show a default clear animation instead of empty view to preserve visual continuity
+                    // This prevents the animation from disappearing when weather data is temporarily unavailable
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        ClearDayView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .opacity(0.9)
-            .blendMode(.screen)
+            .opacity(1.0) // Full opacity for better visibility
+            .blendMode(.normal) // Use normal blend mode for better visibility, especially at night
+            // Use stable ID based on condition to preserve animation state across updates
+            // Only changes when condition actually changes, not on every temperature update
+            .id("weather-animation-\(weatherCondition.rawValue)")
+            .allowsHitTesting(false) // Allow touches to pass through to content
             
-            // Content - enhanced with location and forecast
+            // Content - enhanced with location and forecast (placed on top of animation)
             VStack(spacing: 12) {
                 // Main weather info
             weatherHeader()
@@ -4264,6 +4416,8 @@ struct BikeTrackerView: View {
                     .padding(.bottom, 10)
             }
             .padding(.vertical, 15)
+            .background(Color.clear) // Transparent background so animation shows through
+            .zIndex(1) // Ensure content is above animation
         }
         .frame(height: 235)
         .cornerRadius(22)
@@ -4422,24 +4576,21 @@ struct BikeTrackerView: View {
                 ModernRainOverlay(intensity: .medium, nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .stormy:
-                StormOverlay()
+                LightningView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .snowy:
-                SnowOverlay()
+                SnowfallView(nightMode: isNighttime())
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .foggy:
-                FogOverlay()
+                CloudOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .cloudy:
-                CloudOverlay()
+                CloudOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .partlyCloudy:
                 if isNight {
-                    ZStack(alignment: .top) {
-                        StarryNightOverlay()
-                        CloudOverlay(cloudiness: .partial)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    PartlyCloudyNightView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     // Time of day variations
                     let hour = Calendar.current.component(.hour, from: Date())
@@ -4453,11 +4604,8 @@ struct BikeTrackerView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
                         // Regular daytime
-                        ZStack(alignment: .top) {
-                            SunRaysView(showSun: false)
-                            CloudOverlay(cloudiness: .partial)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        PartlyCloudyDayView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                 }
             case .clear:
@@ -4482,7 +4630,7 @@ struct BikeTrackerView: View {
                     }
                 }
             case .windy:
-                WindyWeatherView()
+                WindyOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .unknown:
                 // For unknown weather, just show a clear day/night based on time
@@ -4522,6 +4670,7 @@ struct BikeTrackerView: View {
                 Image(systemName: weatherIconName)
                     .font(.system(size: 24))
                     .foregroundColor(.white)
+                    .id("weather-icon-\(weatherIconName)") // Force refresh when icon changes
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
@@ -4532,10 +4681,12 @@ struct BikeTrackerView: View {
                     Text(getWeatherDescription(condition: weatherCondition, isNightMode: isNighttime()))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.white)
+                        .id("weather-desc-\(weatherCondition.rawValue)") // Force refresh
                     
                     Text(formatTemperature(temperature))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.white)
+                        .id("temperature-\(temperature)") // Force refresh when temperature changes
                 }
                 
                 Spacer()
@@ -4594,8 +4745,8 @@ struct BikeTrackerView: View {
     
     // Helper method to format wind speed according to user preferences
     private func formatWindSpeed(_ speed: Double) -> String {
-        return UserPreferences.shared.useMetricSystem ?
-            "\(Int(speed * 1.60934)) km/h" :
+        return UserPreferences.shared.useMetricSystem ? 
+            "\(Int(speed * 1.60934)) km/h" : 
             "\(Int(speed)) mph"
     }
     

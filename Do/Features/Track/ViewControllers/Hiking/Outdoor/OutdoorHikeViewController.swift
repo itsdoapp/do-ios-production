@@ -48,10 +48,10 @@ struct OutdoorHikeTrackerView: View {
     public let cardBackground = Color(UIColor(red: 0.12, green: 0.15, blue: 0.25, alpha: 0.9))
     public let cardCornerRadius: CGFloat = 16
     
-    
-    
-    // Hike engine reference for data
-    public let engine = HikeTrackingEngine.shared
+    // Use viewModel's engine instead of creating a duplicate
+    private var engine: HikeTrackingEngine {
+        return viewModel.engine
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -1225,6 +1225,26 @@ class OutdoorHikeViewController: UIViewController, CLLocationManagerDelegate, MK
             if isJoiningExistingWorkout {
                 print("📱 Joining existing workout from watch, skipping auto-start")
                 
+                // Establish device coordination when joining
+                engine.establishDeviceCoordination()
+                
+                // Ensure metrics coordinator is set up
+                if metricsCoordinator == nil {
+                    setupMetricsCoordinator()
+                }
+                metricsCoordinator?.updatePolicy(
+                    isIndoor: false, // Hiking is always outdoor
+                    hasGoodGPS: engine.hasGoodLocationData,
+                    isWatchTracking: engine.isWatchTracking
+                )
+                
+                // Request immediate metrics sync from watch
+                if WCSession.default.isReachable {
+                    WCSession.default.sendMessage(["type": "syncWorkoutData"], replyHandler: nil) { error in
+                        print("⚠️ Error requesting metrics sync: \(error.localizedDescription)")
+                    }
+                }
+                
                 // Update UI immediately with current metrics
                 updateUIWithLatestMetrics()
                 
@@ -1334,8 +1354,9 @@ class OutdoorHikeViewController: UIViewController, CLLocationManagerDelegate, MK
     @objc public func handleAppWillResignActive() {
         print("📱 App going to background - ensuring tracking continues")
         
-        // Make sure location updates continue in background
-        locationManager.allowsBackgroundLocationUpdates = true
+        // Safely make sure location updates continue in background
+        // This will only enable if proper authorization and capabilities are in place
+        _ = locationManager.safelyEnableBackgroundLocationUpdates()
         
         // Ensure audio session is active to maintain background operation
         LoudnessManager.shared.startBackgroundAudio()
@@ -1605,7 +1626,11 @@ class OutdoorHikeViewController: UIViewController, CLLocationManagerDelegate, MK
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = 5 // Update every 5 meters for more accuracy
-        locationManager.allowsBackgroundLocationUpdates = true
+        // CRITICAL: Don't set allowsBackgroundLocationUpdates here - it can only be set
+        // when authorized and during active tracking. It will be set automatically
+        // when startTracking() is called on ModernLocationManager.
+        // Setting it here causes a crash if the app doesn't have the proper
+        // background location capability or authorization.
         locationManager.startUpdatingLocation()
     }
     
@@ -1937,7 +1962,7 @@ class OutdoorHikeViewController: UIViewController, CLLocationManagerDelegate, MK
             showRunSummary()
             // Update watch
             sendTrackingStatusToWatch()
-        case .stopping:
+        case .stopped:
             isRunning = false
             isPaused = false
         case .stopped:
@@ -5671,7 +5696,7 @@ class OutdoorHikeViewController: UIViewController, CLLocationManagerDelegate, MK
                     print("🏁 Summary already shown, skipping duplicate")
                 }
                 
-            case .stopping:
+            case .stopped:
                 // Treat stopping as a transient non-running, non-paused state
                 self.isRunning = false
                 self.isPaused = false
@@ -7997,6 +8022,44 @@ extension OutdoorHikeViewController: WorkoutCommunicationDelegate {
     // Implement all required methods from the protocol
     func didReceiveWorkoutUpdate(_ update: WorkoutPayload) {
         print("📱 Received workout update: \(update.type)")
+        
+        // Convert WorkoutPayload to dictionary format for existing handlers
+        var updateDict: [String: Any] = [
+            "type": update.type,
+            "timestamp": update.timestamp
+        ]
+        
+        if let workoutId = update.workoutId {
+            updateDict["id"] = workoutId
+            updateDict["workoutId"] = workoutId
+        }
+        
+        if let workoutType = update.workoutType {
+            updateDict["workoutType"] = workoutType
+        }
+        
+        if let state = update.state {
+            updateDict["state"] = state
+        }
+        
+        if let metrics = update.metrics {
+            updateDict["distance"] = metrics.distance
+            updateDict["elapsedTime"] = metrics.elapsedTime
+            updateDict["heartRate"] = metrics.heartRate
+            updateDict["pace"] = metrics.pace
+            updateDict["calories"] = metrics.calories
+            if let cadence = metrics.cadence {
+                updateDict["cadence"] = cadence
+            }
+            if let elevationGain = metrics.elevationGain {
+                updateDict["elevationGain"] = elevationGain
+            }
+        }
+        
+        // Route to specific handler based on workout type
+        if let workoutType = update.workoutType, workoutType == "hike" {
+            didReceiveHikingWorkoutUpdate(updateDict)
+        }
     }
     
     func didReceiveSetUpdate(_ update: SetPayload) {
@@ -8545,7 +8608,7 @@ struct HikeSplitTimesView: View {
         return engine.useMetric ? 1000.0 : 1609.34 // meters in km or mile
     }
     
-    private var splitsToShow: [SplitTime] {
+    private var splitsToShow: [HikeSplitTime] {
         // Filter to the 3 most recent splits
         return Array(engine.splitTimes.suffix(3))
     }
@@ -8570,18 +8633,22 @@ struct HikeSplitTimesView: View {
         }
     }
     
-    private func formatSplitPace(_ split: SplitTime) -> String {
-        // split.pace is stored as seconds per meter (Double)
-        // Convert to total seconds per km or mile, then format as mm:ss
-        let secondsPerMeter = max(split.pace, 0)
+    private func formatSplitPace(_ split: HikeSplitTime) -> String {
+        // split.pace is stored as Measurement<UnitSpeed> (typically in minutesPerKilometer)
+        // Convert to seconds per km or seconds per mile, then format as mm:ss
+        let paceValue = split.pace.value // This is in minutes per km
+        guard paceValue > 0 else { return "--:--" }
+        
         let secondsPerUnit: Double
         
         if engine.useMetric {
-            // seconds per kilometer
-            secondsPerUnit = secondsPerMeter * 1000.0
+            // Convert minutes per km to seconds per km
+            secondsPerUnit = paceValue * 60.0
         } else {
-            // seconds per mile
-            secondsPerUnit = secondsPerMeter * 1609.34
+            // Convert minutes per km to seconds per mile
+            // First convert to seconds per km, then to seconds per mile
+            let secondsPerKm = paceValue * 60.0
+            secondsPerUnit = secondsPerKm * 1.60934 // Convert km to mile
         }
         
         let totalSeconds = max(0, Int(secondsPerUnit.rounded()))

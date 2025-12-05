@@ -328,8 +328,39 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
     private var hasLoadedInitialData = false
     private var hasReceivedLocation = false
     
+    /// Show cached weather and routes data immediately if available
+    private func showCachedDataIfAvailable() {
+        // Show cached weather if available and still valid
+        if let cachedWeather = weatherService.currentWeather,
+           let lastLocation = weatherService.lastLocation,
+           let lastFetchTime = weatherService.lastWeatherFetchTime,
+           Date().timeIntervalSince(lastFetchTime) < 3600, // Less than 1 hour old
+           let currentLocation = locationManager.location,
+           currentLocation.distance(from: lastLocation) < 1000 { // Within 1km
+            print("📦 Showing cached weather data immediately")
+            weatherCondition = cachedWeather.condition
+            temperature = cachedWeather.temperature
+            humidity = cachedWeather.humidity
+            windSpeed = cachedWeather.windSpeed
+            let isNight = Calendar.current.component(.hour, from: Date()) < 6 || Calendar.current.component(.hour, from: Date()) > 18
+            weatherIconName = getWeatherIcon(for: cachedWeather.condition, isNight: isNight)
+            forecastDescription = generateForecastDescription(cachedWeather)
+            weatherDataLoaded = true
+        }
+        
+        // Show cached routes if available
+        if !RoutePlanner.shared.nearbyTrails.isEmpty {
+            print("📦 Showing \(RoutePlanner.shared.nearbyTrails.count) cached routes")
+            hasLoadedRoutes = true
+            routesForceRefreshID = UUID()
+        }
+    }
+    
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        
+        // End initial load timer immediately - view is now visible
+        PerformanceLogger.end("Track:initialLoad", extra: "view appeared")
         
         // Check and update hosting controller
         if let hostingView = hostingController?.view {
@@ -343,6 +374,10 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
         
         // Load weather/routes ONLY if location permission is granted
         if !hasLoadedInitialData {
+            // Show cached data immediately if available
+            showCachedDataIfAvailable()
+            
+            // Load fresh data in background (non-blocking)
             checkLocationAndLoadData()
             hasLoadedInitialData = true
         }
@@ -353,28 +388,41 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
         
         switch status {
         case .authorizedWhenInUse, .authorizedAlways:
-            print("✅ Location authorized - requesting single fix for weather/routes")
+            print("✅ Location authorized - checking for cached location")
             
-            // Prefer one-shot request instead of continuous updates for initial load
-            if locationManager.location == nil {
-                print("📍 No cached location - requesting one-time location…")
-                // Use smart location reason to avoid continuous updates
+            // Always prefer cached location if available and recent (within 10 minutes)
+            if let cachedLocation = locationManager.location,
+               Date().timeIntervalSince(cachedLocation.timestamp) < 600 {
+                print("📍 Using cached location (age: \(Int(Date().timeIntervalSince(cachedLocation.timestamp)))s)")
+                // Load data in parallel for faster loading using cached location
+                Task {
+                    async let weatherTask = loadWeatherData()
+                    async let routesTask = fetchRoutes()
+                    
+                    // Wait for weather and routes (critical for UI)
+                    await weatherTask
+                    await routesTask
+                    
+                    // Load history in background (non-critical, can be deferred)
+                    Task.detached(priority: .utility) {
+                        await MainActor.run {
+                            self.loadRunningHistory()
+                        }
+                    }
+                }
+            } else {
+                print("📍 No cached location or location is stale - requesting one-time location…")
+                // Use smart location reason - this will use one-time request
                 ModernLocationManager.shared.requestLocation(for: .routeDisplay)
                 
                 // Wait for location, then load data
                 waitForLocationThenLoadData()
-            } else {
-                print("📍 Using cached location")
-                Task {
-                    await loadWeatherData()
-                    await fetchRoutes()
-                    self.loadRunningHistory()
-                }
             }
             
         case .notDetermined:
             print("📱 Location not determined - requesting permission")
-            locationManager.requestWhenInUseAuthorization()
+            // Request authorization through ModernLocationManager
+            locationManager.manager.requestWhenInUseAuthorization()
             // Will load data after permission granted via observer
             
         case .denied, .restricted:
@@ -426,15 +474,27 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
                 
                 print("📍 Got location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
                 
+                // Stop location immediately - we have what we need
+                ModernLocationManager.shared.stopLocation(for: .routeDisplay)
+                
                 PerformanceLogger.start("Track:weather+routes")
                 Task {
-                    await self.loadWeatherData()
-                    await self.fetchRoutes()
-                    self.loadRunningHistory()
-                    // Stop location now that we've got what we need for this screen
-                    ModernLocationManager.shared.stopLocation(for: .routeDisplay)
+                    // Load weather and routes in parallel for faster loading
+                    async let weatherTask = self.loadWeatherData()
+                    async let routesTask = self.fetchRoutes()
+                    
+                    // Wait for weather and routes (critical for UI)
+                    await weatherTask
+                    await routesTask
+                    
                     PerformanceLogger.end("Track:weather+routes")
-                    PerformanceLogger.end("Track:initialLoad")
+                    
+                    // Load history in background (non-critical, can be deferred)
+                    Task.detached(priority: .utility) {
+                        await MainActor.run {
+                            self.loadRunningHistory()
+                        }
+                    }
                 }
             }
         
@@ -455,28 +515,22 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
 
     // Request authorization if needed. If denied/restricted, guide user to Settings
     private func requestLocationAuthorizationIfNeeded() {
-        // Check authorization status off main thread to avoid UI unresponsiveness warning
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            let status = CLLocationManager.authorizationStatus()
-            DispatchQueue.main.async {
-                switch status {
-                case .authorizedAlways, .authorizedWhenInUse:
-                    // Ensure precise accuracy if reduced
-                    ModernLocationManager.shared.ensurePreciseAccuracyIfNeeded()
-                    return
-                case .notDetermined:
-                    // Use ModernLocationManager which handles the async dispatch
-                    ModernLocationManager.shared.requestWhenInUseAuthorization()
-                case .denied, .restricted:
-                    print("❌ Location permission denied/restricted. Prompting user to open Settings…")
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
-                @unknown default:
-                    return
-                }
+        let status = CLLocationManager.authorizationStatus()
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            // Ensure precise accuracy if reduced
+            ModernLocationManager.shared.ensurePreciseAccuracyIfNeeded()
+            return
+        case .notDetermined:
+            print("📱 Requesting location authorization...")
+            locationManager.manager.requestWhenInUseAuthorization()
+        case .denied, .restricted:
+            print("❌ Location permission denied/restricted. Prompting user to open Settings…")
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
             }
+        @unknown default:
+            return
         }
     }
     
@@ -598,9 +652,13 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
         
         print("📱 ModernRunTrackerViewController: Starting weather data loading")
         
-        // Initialize weather state
+        // Initialize weather state - but preserve existing weather data to avoid losing animation
         await MainActor.run {
-            self.weatherDataLoaded = false
+            // Only reset weatherDataLoaded if we don't have any weather data yet
+            // This prevents the animation from disappearing when refreshing weather
+            if !self.weatherDataLoaded || self.weatherCondition == .unknown {
+                self.weatherDataLoaded = false
+            }
             self.forecastDescription = "Checking forecast..."
             
             // Set loading state but don't reset temperature to avoid flicker if we have data
@@ -616,10 +674,29 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
             // Get weather data
             print("📍 Fetching weather for: \(location.coordinate.latitude), \(location.coordinate.longitude)")
             
-            // Launch geocoding in parallel with weather fetch for efficiency
-            updateLocationName(for: location)
+            // Start geocoding in parallel with weather fetch for efficiency
+            // Use Task with high priority to ensure it completes
+            Task(priority: .userInitiated) {
+                await updateLocationNameAsync(for: location)
+            }
             
+            print("🌤️ Calling weatherService.fetchWeather...")
             let (data, error) = await weatherService.fetchWeather(for: location)
+            print("🌤️ weatherService.fetchWeather returned - data: \(data != nil ? "present" : "nil"), error: \(error?.localizedDescription ?? "none")")
+            
+            // If geocoding hasn't completed yet and we still have "Loading location...", 
+            // wait a bit for it to complete (with timeout)
+            if locationCity == "Loading location..." {
+                print("⏳ Waiting for geocoding to complete...")
+                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+                if locationCity == "Loading location..." {
+                    print("⏱️ Geocoding timeout, using coordinates as fallback")
+                    await MainActor.run {
+                        self.locationCity = String(format: "%.4f, %.4f", location.coordinate.latitude, location.coordinate.longitude)
+                        self.objectWillChange.send()
+                    }
+                }
+            }
             
                 if let data = data {
                 if UserPreferences.shared.useMetricSystem == false {
@@ -672,9 +749,17 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
                         self.forecastDescription = "Weather data unavailable"
                     }
                     
-                    // Show weather view with error message
+                    // Preserve existing weather condition if we have one, otherwise set to clear as fallback
+                    // This prevents the animation from disappearing on error
+                    if self.weatherCondition == .unknown {
+                        self.weatherCondition = .clear // Default to clear instead of unknown
+                    }
+                    
+                    // Show weather view with error message (preserve existing data)
                     self.weatherDataLoaded = true
-                    self.weatherIconName = "exclamationmark.triangle"
+                    if self.weatherIconName.isEmpty {
+                        self.weatherIconName = "exclamationmark.triangle"
+                    }
                 }
             }
         } else {
@@ -691,6 +776,11 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
             let fallbackLocation = CLLocation(latitude: lastKnownLat, longitude: lastKnownLon)
             print("📍 Using cached location for weather: \(lastKnownLat), \(lastKnownLon)")
             
+            // Also geocode the fallback location
+            Task {
+                await updateLocationNameAsync(for: fallbackLocation)
+            }
+            
             let (data, error) = await weatherService.fetchWeather(for: fallbackLocation)
             if let data = data {
                 await MainActor.run {
@@ -701,7 +791,10 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
                     let isNight = Calendar.current.component(.hour, from: Date()) < 6 || Calendar.current.component(.hour, from: Date()) > 18
                     self.weatherIconName = self.getWeatherIcon(for: data.condition, isNight: isNight)
                     self.forecastDescription = self.generateForecastDescription(data)
-                    self.locationCity = "Last known location"
+                    // Don't set "Last known location" here - let geocoding update it
+                    if self.locationCity == "Loading location..." {
+                        self.locationCity = "Loading location name..."
+                    }
                     self.weatherDataLoaded = true
                     self.isFetchingWeather = false
                     self.weatherFetchStartedAt = nil
@@ -1241,6 +1334,63 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
             
             DispatchQueue.main.async {
                 self.locationCity = formattedLocation.isEmpty ? "Location unavailable" : formattedLocation
+                // Force UI update
+                self.objectWillChange.send()
+            }
+        }
+    }
+    
+    // Async version for better integration with async/await
+    private func updateLocationNameAsync(for location: CLLocation) async {
+        print("🌍 Starting geocoding for location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        let geocoder = CLGeocoder()
+        do {
+            print("🌍 Calling reverseGeocodeLocation...")
+            let placemarks = try await geocoder.reverseGeocodeLocation(location)
+            print("🌍 Received \(placemarks.count) placemarks")
+            
+            guard let placemark = placemarks.first else {
+                print("❌ No placemarks found (async)")
+                await MainActor.run {
+                    if self.locationCity == "Loading location..." || self.locationCity == "Last known location" {
+                        self.locationCity = "Location unavailable"
+                        self.objectWillChange.send()
+                    }
+                }
+                return
+            }
+            
+            // Construct location string
+            let city = placemark.locality ?? ""
+            let state = placemark.administrativeArea ?? ""
+            let country = placemark.country ?? ""
+            
+            print("🌍 Placemark details - city: \(city), state: \(state), country: \(country)")
+            
+            var formattedLocation = city
+            
+            if country == "United States" || country == "USA" {
+                if !state.isEmpty { formattedLocation += ", \(state)" }
+            } else {
+                if !country.isEmpty { formattedLocation += ", \(country)" }
+            }
+            
+            print("📍 Location geocoded (async): \(formattedLocation)")
+            
+            await MainActor.run {
+                let oldCity = self.locationCity
+                self.locationCity = formattedLocation.isEmpty ? "Location unavailable" : formattedLocation
+                print("📍 Updated locationCity from '\(oldCity)' to '\(self.locationCity)'")
+                // Force UI update
+                self.objectWillChange.send()
+            }
+        } catch {
+            print("❌ Geocoding error (async): \(error.localizedDescription)")
+            await MainActor.run {
+                if self.locationCity == "Loading location..." || self.locationCity == "Last known location" {
+                    self.locationCity = "Location unavailable"
+                    self.objectWillChange.send()
+                }
             }
         }
     }
@@ -1254,6 +1404,7 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
     // Add a cache for routes
     private var cachedRoutes: [String: [Trail]] = [:]
     private var lastRouteLoadTime: Date?
+    private var lastRouteLoadLocation: CLLocation?
     private var retryCount = 0
     private let maxRetries = 3
     
@@ -1323,11 +1474,25 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
             }
         }
         
-        // Skip if we already have routes and aren't forcing refresh
+        // Always fetch fresh routes when switching categories or if force refresh is requested
+        // Don't skip if we have routes - they might be from a different category
         if !forceRefresh && !routePlanner.nearbyTrails.isEmpty {
-            print("✓ Using cached routes - \(routePlanner.nearbyTrails.count) routes available")
-            hasLoadedRoutes = true
-            return
+            // Check if routes are recent (less than 5 minutes old) and location hasn't changed much
+            // If so, we can use cached routes, otherwise fetch fresh ones
+            if let lastLoadTime = lastRouteLoadTime,
+               Date().timeIntervalSince(lastLoadTime) < 300, // Less than 5 minutes
+               let currentLocation = locationManager.location {
+                // Check if location hasn't changed significantly (within 500m)
+                if let cachedLocation = lastRouteLoadLocation,
+                   currentLocation.distance(from: cachedLocation) < 500 {
+                    print("✓ Using cached routes - \(routePlanner.nearbyTrails.count) routes available (recent & same location)")
+                    hasLoadedRoutes = true
+                    return
+                }
+            }
+            // Routes exist but are stale or location changed - clear and fetch fresh
+            print("🔄 Routes exist but are stale or location changed - fetching fresh routes")
+            routePlanner.clearTrails()
         }
         
         isFetchingRoutes = true
@@ -1373,6 +1538,10 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
                 DispatchQueue.main.async {
                     // Mark routes as loaded first
                     self.hasLoadedRoutes = true
+                    
+                    // Update cache timestamp and location
+                    self.lastRouteLoadTime = Date()
+                    self.lastRouteLoadLocation = self.locationManager.location
                     
                     // Force refresh IDs to ensure SwiftUI updates
                     self.routesForceRefreshID = UUID()
@@ -1973,6 +2142,12 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
     // MARK: - Settings Observer
     
     private func observePreferencesChanges() {
+        // Initialize tracked preference value
+        if let savedTypeString = UserDefaults.standard.string(forKey: "selectedRunType"),
+           let savedType = RunType(rawValue: savedTypeString) {
+            previousRunType = savedType
+        }
+        
         // Observe when user preferences change
         NotificationCenter.default.addObserver(
             self,
@@ -1984,9 +2159,22 @@ class ModernRunTrackerViewController: UIViewController, ObservableObject, CLLoca
     
     // Add a debouncing mechanism
     private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousRunType: RunType?
     
     @objc private func userPreferencesDidChange() {
-        print("🔄 User preferences changed notification received")
+        // Check if the actual preference key changed before processing
+        let currentRunTypeString = UserDefaults.standard.string(forKey: "selectedRunType")
+        let currentRunType = currentRunTypeString.flatMap { RunType(rawValue: $0) }
+        
+        // Only process if the preference actually changed
+        guard currentRunType != previousRunType else {
+            // Not a preference change we care about - ignore
+            return
+        }
+        
+        // Update tracked value
+        previousRunType = currentRunType
         
         // Cancel any existing timer
         preferencesDebounceTimer?.invalidate()
@@ -3259,12 +3447,18 @@ struct RunTrackerView: View {
             FindRoutesView()
         }
         .onAppear {
-            // First request location access
-            locationManager.requestWhenInUseAuthorization()
+            // First request location access if needed
+            let status = CLLocationManager.authorizationStatus()
+            if status == .notDetermined {
+                print("📱 Requesting location authorization in FindRoutesView...")
+                locationManager.manager.requestWhenInUseAuthorization()
+            }
             
             // Load weather with a slight delay to ensure location is available
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                loadWeatherData()
+                Task {
+                    await viewModel.loadWeatherData()
+                }
             }
             
             // Run remaining initialization
@@ -3273,39 +3467,25 @@ struct RunTrackerView: View {
             // Initialize the selected category
             initializeSelectedCategory()
             
+            // Enable run type selection animation on initial load
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(.easeIn(duration: 0.3)) {
+                    showRunTypeSelectionAnimation = true
+                }
+            }
+            
             // Set up a retry for weather if it fails to load
             DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                 if !viewModel.weatherDataLoaded {
                     print("⚠️ Weather loading timeout - retrying")
-                    loadWeatherData()
+                    Task {
+                        await viewModel.loadWeatherData()
+                    }
                 }
             }
             
             // Subscribe to route change notifications
             setupRouteChangeNotifications()
-        }
-        .sheet(isPresented: $showingCategorySelector) {
-            CategorySelectorView(
-                isPresented: $showingCategorySelector,
-                selectedCategory: Binding(
-                    get: { self.selectedCategoryIndex },
-                    set: { newIndex in
-                        print("🎯 CategorySelectorView selected index: \(newIndex)")
-                        // Directly update UI state
-                        self.selectedCategoryIndex = newIndex
-                        // Close the sheet first
-                        self.showingCategorySelector = false
-                        // Use a delay before triggering the navigation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            // Call the delegate directly for navigation
-                            viewModel.categoryDelegate?.didSelectCategory(at: newIndex)
-                        }
-                    }
-                ),
-                categories: Array(zip(categoryTitles, categoryIcons)).map { ($0.0, $0.1) }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
     }
     
@@ -3555,7 +3735,9 @@ struct RunTrackerView: View {
             if viewModel.weatherDataLoaded {
                 weatherView()
                     .padding(.horizontal)
-                    .id("weather-loaded-\(viewModel.temperature)") // Force refresh when temperature changes
+                    // Use stable ID based on condition to preserve animation state
+                    // Only change ID when condition actually changes, not on every temperature update
+                    .id("weather-\(viewModel.weatherCondition.rawValue)")
             } else {
                 // Inline implementation instead of using WeatherLoadingView
                 VStack {
@@ -3619,10 +3801,17 @@ struct RunTrackerView: View {
             ZStack {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
-                        let runTypes = [RunType.outdoorRun, .treadmillRun, .trailRun, .recoveryRun]
+                        let runTypes = [RunType.outdoorRun, .treadmillRun, .trailRun, .intervalTraining, .recoveryRun, .lapRun]
 
                         ForEach(runTypes, id: \.self) { type in
-                            runTypeButtonView(for: type)
+                            runTypeButton(type)
+                                .offset(y: showRunTypeSelectionAnimation && selectedRunType == type ? -10 : 0)
+                                .scaleEffect(showRunTypeSelectionAnimation && selectedRunType == type ? 1.05 : 1.0)
+                                .shadow(color: Color.blue.opacity(showRunTypeSelectionAnimation && selectedRunType == type ? 0.5 : 0),
+                                        radius: showRunTypeSelectionAnimation && selectedRunType == type ? 8 : 0,
+                                        x: 0, y: 2)
+                                .animation(.spring(response: 0.4, dampingFraction: 0.7), value: selectedRunType)
+                                .animation(.spring(response: 0.4, dampingFraction: 0.7), value: showRunTypeSelectionAnimation)
                         }
                     }
                     .padding(.horizontal)
@@ -4008,6 +4197,8 @@ struct RunTrackerView: View {
                         showRoutePreview = false
                     }
                 )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
         }
     }
@@ -4494,7 +4685,7 @@ struct RunTrackerView: View {
                 .cornerRadius(22)
                 .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
                 
-            // Normal weather animation
+            // Normal weather animation - placed behind content but visible
             ZStack(alignment: .top) {
                 switch viewModel.weatherCondition {
                 case .clear:
@@ -4515,7 +4706,22 @@ struct RunTrackerView: View {
                         }
                     }
                 case .partlyCloudy:
-                    CloudOverlay(nightMode: isNighttime(), cloudiness: .partial)
+                    if isNighttime() {
+                        PartlyCloudyNightView()
+                    } else {
+                        // Time of day variations for partly cloudy day
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            PartlyCloudyMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            PartlyCloudyEveningView()
+                        } else {
+                            // Regular daytime
+                            PartlyCloudyDayView()
+                        }
+                    }
                 case .cloudy:
                     CloudOverlay(nightMode: isNighttime())
                 case .rainy:
@@ -4523,20 +4729,30 @@ struct RunTrackerView: View {
                 case .stormy:
                     LightningView()
                 case .snowy:
-                    SnowOverlay()
+                    SnowfallView(nightMode: isNighttime())
                 case .foggy:
-                    CloudOverlay(nightMode: isNighttime())
+                    ModernFogOverlay(nightMode: isNighttime())
                 case .windy:
-                    CloudOverlay(nightMode: isNighttime(), cloudiness: .partial)
+                    WindyOverlay(nightMode: isNighttime())
                 case .unknown:
-                    EmptyView()
+                    // Show a default clear animation instead of empty view to preserve visual continuity
+                    // This prevents the animation from disappearing when weather data is temporarily unavailable
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        ClearDayView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .opacity(0.9)
-            .blendMode(.screen)
+            .opacity(1.0) // Full opacity for better visibility
+            .blendMode(.normal) // Use normal blend mode for better visibility, especially at night
+            // Use stable ID based on condition to preserve animation state across updates
+            // Only changes when condition actually changes, not on every temperature update
+            .id("weather-animation-\(viewModel.weatherCondition.rawValue)")
+            .allowsHitTesting(false) // Allow touches to pass through to content
             
-            // Content - enhanced with location and forecast
+            // Content - enhanced with location and forecast (placed on top of animation)
             VStack(spacing: 12) {
                 // Main weather info
             weatherHeader()
@@ -4550,6 +4766,8 @@ struct RunTrackerView: View {
                     .padding(.bottom, 10)
             }
             .padding(.vertical, 15)
+            .background(Color.clear) // Transparent background so animation shows through
+            .zIndex(1) // Ensure content is above animation
         }
         .frame(height: 235)
         .cornerRadius(22)
@@ -4697,7 +4915,13 @@ struct RunTrackerView: View {
     // Helper function to determine if it's night time
     private func isNighttime() -> Bool {
         let hour = Calendar.current.component(.hour, from: Date())
-        return hour < 6 || hour > 18
+        // Consider it night time if it's before 6 AM or after 6 PM (18:00)
+        // This matches the old DOIOS workspace logic
+        let isNight = hour < 6 || hour >= 18
+        if isNight {
+            print("🌙 isNighttime() = true (hour: \(hour))")
+        }
+        return isNight
     }
     
     // Weather animation overlay function
@@ -4708,24 +4932,21 @@ struct RunTrackerView: View {
                 ModernRainOverlay(intensity: .medium, nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .stormy:
-                StormOverlay()
+                LightningView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .snowy:
-                SnowOverlay()
+                SnowfallView(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .foggy:
-                FogOverlay()
+                ModernFogOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .cloudy:
-                CloudOverlay()
+                ModernFogOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .partlyCloudy:
                 if isNight {
-                    ZStack(alignment: .top) {
-                        StarryNightOverlay()
-                        CloudOverlay(cloudiness: .partial)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    PartlyCloudyNightView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     // Time of day variations
                     let hour = Calendar.current.component(.hour, from: Date())
@@ -4739,11 +4960,8 @@ struct RunTrackerView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
                         // Regular daytime
-                        ZStack(alignment: .top) {
-                            SunRaysView(showSun: false)
-                            CloudOverlay(cloudiness: .partial)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        PartlyCloudyDayView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                 }
             case .clear:
@@ -4768,7 +4986,7 @@ struct RunTrackerView: View {
                     }
                 }
             case .windy:
-                WindyWeatherView()
+                WindyOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .unknown:
                 // For unknown weather, just show a clear day/night based on time
@@ -4916,6 +5134,8 @@ struct RunTrackerView: View {
     private func loadWeatherData() {
         Task {
             if let location = locationManager.location {
+                print("📍 [Private loadWeatherData] Using location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+                
                 // Immediately set coordinates while waiting for geocoding
                 let lat = location.coordinate.latitude
                 let lon = location.coordinate.longitude
@@ -4949,7 +5169,9 @@ struct RunTrackerView: View {
                 }
                 
                 // Load weather data
+                print("🌤️ [Private loadWeatherData] Calling weatherService.fetchWeather...")
                 let (data, error) = await weatherService.fetchWeather(for: location)
+                print("🌤️ [Private loadWeatherData] weatherService.fetchWeather returned - data: \(data != nil ? "present" : "nil"), error: \(error?.localizedDescription ?? "none")")
                 
                 await MainActor.run {
                     if let data = data {
@@ -5015,23 +5237,6 @@ struct RunTrackerView: View {
     }
     
     // Add this method to the RunTrackerView to create run type buttons
-    private func runTypeButtonView(for type: RunType) -> some View {
-        let isSelected = selectedRunType == type
-        let shouldAnimate = showRunTypeSelectionAnimation && isSelected
-        
-        return runTypeButton(type)
-            .offset(y: shouldAnimate ? -10 : 0)
-            .scaleEffect(shouldAnimate ? 1.05 : 1.0)
-            .shadow(
-                color: Color.blue.opacity(shouldAnimate ? 0.5 : 0),
-                radius: shouldAnimate ? 8 : 0,
-                x: 0,
-                y: 2
-            )
-            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: selectedRunType)
-            .animation(.spring(response: 0.4, dampingFraction: 0.7), value: showRunTypeSelectionAnimation)
-    }
-    
     private func runTypeButton(_ type: RunType) -> some View {
         let isSelected = selectedRunType == type
         
@@ -5477,526 +5682,9 @@ struct RainSplash: View {
     }
 }
 
-// Enhanced snow overlay with realistic 3D snowflakes
-struct SnowOverlay: View {
-    let smallFlakeCount = 20
-    let mediumFlakeCount = 15
-    let largeFlakeCount = 10
-    
-    var body: some View {
-        GeometryReader { geometry in
-        ZStack {
-            // Multiple layers of snowflakes for 3D depth effect
-                SnowflakeLayer(count: smallFlakeCount, size: 8...12, speed: 15...25, swayFactor: 20, opacity: 0.6, zPos: 20, bounds: geometry.size)
-                .blur(radius: 0.3) // Slight blur for closest layer
-            
-                SnowflakeLayer(count: mediumFlakeCount, size: 12...18, speed: 10...20, swayFactor: 30, opacity: 0.8, zPos: 0, bounds: geometry.size)
-            
-                SnowflakeLayer(count: largeFlakeCount, size: 18...24, speed: 8...15, swayFactor: 40, opacity: 0.7, zPos: -20, bounds: geometry.size)
-                .blur(radius: 0.5) // Stronger blur for distant layer
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-        }
-    }
-}
+// Weather views are now defined in WeatherViews.swift
 
-struct SnowflakeLayer: View {
-    let count: Int
-    let size: ClosedRange<CGFloat>
-    let speed: ClosedRange<Double>
-    let swayFactor: CGFloat
-    let opacity: Double
-    let zPos: CGFloat // 3D z-position for depth
-    let bounds: CGSize
-    
-    var body: some View {
-            ForEach(0..<count, id: \.self) { _ in
-                EnhancedSnowflake(
-                    size: CGFloat.random(in: size),
-                    speed: Double.random(in: speed),
-                    swayFactor: CGFloat.random(in: swayFactor/2...swayFactor),
-                    startPosition: CGPoint(
-                    x: CGFloat.random(in: 0...bounds.width),
-                        y: CGFloat.random(in: -50...0)
-                    ),
-                canvasSize: bounds
-                )
-                .opacity(opacity)
-                // Apply a depth effect with a subtle scaling instead of z-offset
-                .scaleEffect(1.0 - (zPos * 0.01))
-        }
-    }
-}
-
-struct EnhancedSnowflake: View {
-    let size: CGFloat
-    let speed: Double
-    let swayFactor: CGFloat
-    let startPosition: CGPoint
-    let canvasSize: CGSize
-    
-    @State private var xPosition: CGFloat = 0
-    @State private var yPosition: CGFloat = 0
-    @State private var rotation: Double = 0
-    @State private var scale: CGFloat = 1
-    
-    // Choose various snowflake designs for variety
-    let snowflakeOptions = ["❄️", "❅", "❆", "✻", "✼"]
-    @State private var snowflakeType: String = "❄️" // Will be randomized on appear
-    
-    var body: some View {
-        Text(snowflakeType)
-            .font(.system(size: size))
-            .foregroundColor(.white)
-            .position(x: xPosition, y: yPosition)
-            .rotationEffect(Angle(degrees: rotation))
-            .scaleEffect(scale)
-            .shadow(color: .white.opacity(0.5), radius: 2, x: 0, y: 0)
-            .onAppear {
-                // Randomize starting properties
-                snowflakeType = snowflakeOptions.randomElement() ?? "❄️"
-                xPosition = startPosition.x
-                yPosition = startPosition.y
-                
-                // Start various animations for realistic movement
-                startFallingAnimation()
-                startSwayingAnimation()
-                startRotatingAnimation()
-                startPulsingAnimation()
-            }
-    }
-    
-    // Falling animation - vertical movement
-    private func startFallingAnimation() {
-        let fallDuration = speed + Double.random(in: 0...3)
-        let delay = Double.random(in: 0...3)
-        
-        withAnimation(Animation.linear(duration: fallDuration).delay(delay).repeatForever(autoreverses: false)) {
-            yPosition = canvasSize.height + 50 // Fall beyond bottom of screen
-        }
-    }
-    
-    // Swaying animation - horizontal movement
-    private func startSwayingAnimation() {
-        let startX = xPosition
-        let maxWidth = canvasSize.width
-        let fallDuration = speed + Double.random(in: 0...3)
-        let delay = Double.random(in: 0...1)
-        let swayCount = Int.random(in: 3...6) // How many sways during fall
-        
-        // Create realistic side-to-side motion while falling
-        for i in 0..<swayCount {
-            let swayDelay = fallDuration / Double(swayCount) * Double(i)
-            let direction = i % 2 == 0 ? 1.0 : -1.0
-            let swayDistance = CGFloat.random(in: swayFactor/2...swayFactor) * direction
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay + swayDelay) {
-                withAnimation(Animation.easeInOut(duration: fallDuration / Double(swayCount))) {
-                    xPosition = max(min(startX + swayDistance, maxWidth), 0)
-                }
-            }
-        }
-    }
-    
-    // Rotation animation
-    private func startRotatingAnimation() {
-        let rotationSpeed = Double.random(in: 2...5)
-        let rotationDirection = Bool.random() ? 1.0 : -1.0
-        let rotationAmount = 360 * rotationDirection
-        
-        withAnimation(Animation.linear(duration: rotationSpeed).repeatForever(autoreverses: false)) {
-            rotation = rotationAmount
-        }
-    }
-    
-    // Pulsing animation for size variation
-    private func startPulsingAnimation() {
-        let pulseSpeed = Double.random(in: 1.5...3)
-        
-        withAnimation(Animation.easeInOut(duration: pulseSpeed).repeatForever(autoreverses: true)) {
-            scale = CGFloat.random(in: 0.85...1.15)
-        }
-    }
-}
-
-// Fog overlay with realistic rising fog effect
-struct FogOverlay: View {
-    let fogLayerCount = 6
-    
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                // Add cloud base similar to CloudOverlay for consistency
-                CloudBase(opacity: 0.3)
-
-                // Multiple layers of fog for realistic depth
-                ForEach(0..<fogLayerCount, id: \.self) { index in
-                    FogLayer(
-                        density: getFogDensity(for: index),
-                        speed: getFogSpeed(for: index),
-                        baseOffset: CGFloat(index) * 60,
-                        opacity: getFogOpacity(for: index),
-                        bounds: geometry.size
-                    )
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-        }
-    }
-    
-    // Helper functions to create varying fog characteristics
-    private func getFogDensity(for index: Int) -> Int {
-        let baseDensity = [3, 4, 5, 4, 3, 2]
-        return baseDensity[index % baseDensity.count]
-    }
-    
-    private func getFogSpeed(for index: Int) -> Double {
-        let baseSpeed = [45.0, 60.0, 50.0, 55.0, 65.0, 70.0]
-        return baseSpeed[index % baseSpeed.count]
-    }
-    
-    private func getFogOpacity(for index: Int) -> Double {
-        // Front and back layers are more transparent
-        if index == 0 || index == fogLayerCount-1 {
-            return 0.15
-        } else if index == 1 || index == fogLayerCount-2 {
-            return 0.25
-        } else {
-            return 0.3
-        }
-    }
-}
-
-// Individual layer of fog
-struct FogLayer: View {
-    let density: Int
-    let speed: Double
-    let baseOffset: CGFloat
-    let opacity: Double
-    let bounds: CGSize
-    
-    @State private var xOffset: CGFloat = -100
-    @State private var yOffset: CGFloat = 0
-    
-    var body: some View {
-        ZStack {
-            // Create multiple fog elements
-            ForEach(0..<density, id: \.self) { index in
-                FogElement(
-                    size: getFogSize(for: index),
-                    position: getFogPosition(for: index),
-                    opacity: opacity
-                )
-            }
-        }
-        .offset(x: xOffset, y: yOffset)
-        .onAppear {
-            startFogAnimation()
-        }
-    }
-    
-    private func getFogSize(for index: Int) -> CGSize {
-        let width = CGFloat.random(in: bounds.width * 0.3...bounds.width * 0.5)
-        let height = CGFloat.random(in: 30...60)
-        return CGSize(width: width, height: height)
-    }
-    
-    private func getFogPosition(for index: Int) -> CGPoint {
-        let x = CGFloat.random(in: 0...bounds.width)
-        let y = baseOffset + CGFloat.random(in: -20...20)
-        // Keep within view bounds
-        return CGPoint(
-            x: x,
-            y: min(max(20, y), bounds.height - 20)
-        )
-    }
-    
-    private func startFogAnimation() {
-        // Initial delay based on layer
-        let initialDelay = Double.random(in: 0...2.0)
-        
-        // Slowly move fog across the screen
-        withAnimation(Animation.linear(duration: speed).delay(initialDelay).repeatForever(autoreverses: false)) {
-            xOffset = bounds.width + 100
-        }
-        
-        // Subtle vertical drift
-        withAnimation(Animation.easeInOut(duration: 10).delay(initialDelay).repeatForever(autoreverses: true)) {
-            yOffset = CGFloat.random(in: -15...15)
-        }
-    }
-}
-
-// Individual fog element
-struct FogElement: View {
-    let size: CGSize
-    let position: CGPoint
-    let opacity: Double
-    
-    @State private var scale: CGFloat = 0.8
-    
-    var body: some View {
-        Capsule()
-            .fill(
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        Color.white.opacity(0),
-                        Color.white.opacity(opacity * 1.2),
-                        Color.white.opacity(opacity),
-                        Color.white.opacity(0)
-                    ]),
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(width: size.width, height: size.height)
-            .position(position)
-            .blur(radius: 15)
-            .scaleEffect(scale)
-            .onAppear {
-                // Subtle pulsing for more natural fog effect
-                withAnimation(Animation.easeInOut(duration: Double.random(in: 4...8)).repeatForever(autoreverses: true)) {
-                    scale = CGFloat.random(in: 0.9...1.1)
-                }
-            }
-    }
-}
-
-
-// Field of stars with various properties
-struct StarField: View {
-    let count: Int
-    let sizeRange: ClosedRange<CGFloat>
-    let opacityRange: ClosedRange<Double>
-    let twinkleIntensity: Double
-    let bounds: CGSize
-    
-    var body: some View {
-        ForEach(0..<count, id: \.self) { _ in
-            Star(
-                size: CGFloat.random(in: sizeRange),
-                position: CGPoint(
-                    x: CGFloat.random(in: 0...bounds.width),
-                    y: CGFloat.random(in: 0...bounds.height * 0.7)
-                ),
-                baseOpacity: Double.random(in: opacityRange),
-                twinkleIntensity: twinkleIntensity
-            )
-        }
-    }
-}
-
-// Individual star with twinkling animation
-struct Star: View {
-    let size: CGFloat
-    let position: CGPoint
-    let baseOpacity: Double
-    let twinkleIntensity: Double
-    
-    @State private var opacity: Double
-    @State private var scale: CGFloat = 1.0
-    
-    init(size: CGFloat, position: CGPoint, baseOpacity: Double, twinkleIntensity: Double) {
-        self.size = size
-        self.position = position
-        self.baseOpacity = baseOpacity
-        self.twinkleIntensity = twinkleIntensity
-        self._opacity = State(initialValue: baseOpacity)
-    }
-    
-    var body: some View {
-        Circle()
-            .fill(Color.white)
-            .frame(width: size, height: size)
-            .position(position)
-            .opacity(opacity)
-            .scaleEffect(scale)
-            .blur(radius: 0.2)
-            .onAppear {
-                startTwinkling()
-            }
-    }
-    
-    private func startTwinkling() {
-        // Only apply twinkling if intensity is sufficient
-        guard twinkleIntensity > 0.1 else { return }
-        
-        // Get random timing for natural effect
-        let duration = Double.random(in: 1.0...3.0)
-        let delay = Double.random(in: 0...3.0)
-        
-        // Subtle opacity variation based on twinkle intensity
-        let minOpacity = max(0.1, baseOpacity - (twinkleIntensity * baseOpacity * 0.7))
-        
-        // Start twinkling animation with delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            // Opacity animation (twinkling)
-            withAnimation(Animation.easeInOut(duration: duration).repeatForever(autoreverses: true)) {
-                opacity = minOpacity
-            }
-            
-            // Scale animation (subtle pulsing)
-            withAnimation(Animation.easeInOut(duration: duration * 1.5).repeatForever(autoreverses: true)) {
-                scale = 1.0 - (twinkleIntensity * 0.3)
-            }
-        }
-    }
-}
-
-// Enhanced storm overlay with realistic lightning and 3D effects
-struct StormOverlay: View {
-    // Lightning state variables
-    @State private var isLightning = false
-    @State private var lightningOpacity: Double = 0
-    @State private var lightningPosition: CGPoint = .zero
-    @State private var showBolt: Bool = false
-    
-    // More intense rain parameters
-    let stormRainCount = 100
-    
-    var body: some View {
-        GeometryReader { geometry in
-        ZStack {
-            // Dark storm clouds with bluish tint
-            CloudOverlay()
-                .colorMultiply(Color(red: 0.2, green: 0.2, blue: 0.3))
-                .blur(radius: 1)
-            
-            // Intense rain
-            RainOverlay()
-            
-            // Lightning effects
-            ZStack {
-                // Full-screen flash
-                Rectangle()
-                    .fill(Color.white)
-                    .opacity(lightningOpacity)
-                    .blendMode(.plusLighter)
-                
-                // Lightning bolt
-                if showBolt {
-                    LightningBolt()
-                        .stroke(Color.white, lineWidth: 3)
-                        .frame(width: 80, height: 150)
-                        .shadow(color: .white, radius: 12, x: 0, y: 0)
-                        .position(lightningPosition)
-                        .opacity(isLightning ? 1 : 0)
-                        .transition(.opacity)
-                        .blendMode(.plusLighter)
-                }
-            }
-            
-                // Heavy rain foreground layer - additional storm rain
-                RainStreakLayer(
-                    count: stormRainCount,
-                    lengthRange: 40...100,
-                    widthRange: 1.5...3.0,
-                    opacityRange: 0.3...0.6,
-                    speedRange: 0.4...0.7,
-                    color: Color(red: 0.5, green: 0.5, blue: 0.7),
-                    bounds: geometry.size
-                )
-                .blendMode(.plusLighter)
-        }
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-        .onAppear {
-                startLightningSequence(in: geometry)
-            }
-        }
-    }
-    
-    // More realistic lightning with random timing
-    private func startLightningSequence(in geometry: GeometryProxy) {
-        // Schedule next lightning strike
-        let nextStrike = Double.random(in: 2.0...6.0)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + nextStrike) {
-            // Random position for the lightning bolt
-            lightningPosition = CGPoint(
-                x: CGFloat.random(in: 50...geometry.size.width-50),
-                y: CGFloat.random(in: 50...200)
-            )
-            
-            // First determine if this is a bolt strike or just a flash
-            let isBoltStrike = Bool.random()
-            showBolt = isBoltStrike
-            
-            // Initial bright flash
-            withAnimation(.easeIn(duration: 0.1)) {
-                lightningOpacity = Double.random(in: 0.2...0.5)
-                isLightning = true
-            }
-            
-            // Between 1-3 flickers for realism
-            let flickerCount = Int.random(in: 1...3)
-            var cumulativeDelay = 0.1
-            
-            for _ in 0..<flickerCount {
-                cumulativeDelay += Double.random(in: 0.05...0.2)
-                
-                // Dim down
-                DispatchQueue.main.asyncAfter(deadline: .now() + cumulativeDelay) {
-                    withAnimation(.easeInOut(duration: 0.1)) {
-                        lightningOpacity = Double.random(in: 0.05...0.2)
-                    }
-                }
-                
-                cumulativeDelay += 0.1
-                
-                // Bright again
-                DispatchQueue.main.asyncAfter(deadline: .now() + cumulativeDelay) {
-                    withAnimation(.easeInOut(duration: 0.1)) {
-                        lightningOpacity = Double.random(in: 0.2...0.5)
-                    }
-                }
-            }
-            
-            // Fade out the lightning
-            DispatchQueue.main.asyncAfter(deadline: .now() + cumulativeDelay + 0.2) {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    lightningOpacity = 0
-                    isLightning = false
-                }
-                
-                // Hide the bolt
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    showBolt = false
-                    startLightningSequence(in: geometry) // Start the next cycle
-                }
-            }
-        }
-    }
-}
-
-// Lightning bolt shape
-struct LightningBolt: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        
-        // Create a more realistic lightning path
-        let width = rect.width
-        let height = rect.height
-        
-        // Starting point
-        path.move(to: CGPoint(x: width/2, y: 0))
-        
-        // Zigzag pattern
-        path.addLine(to: CGPoint(x: width * 0.4, y: height * 0.2))
-        path.addLine(to: CGPoint(x: width * 0.65, y: height * 0.35))
-        path.addLine(to: CGPoint(x: width * 0.3, y: height * 0.55))
-        path.addLine(to: CGPoint(x: width * 0.4, y: height * 0.75))
-        path.addLine(to: CGPoint(x: width * 0.2, y: height))
-        
-        // Add a few branches for a more realistic bolt
-        path.move(to: CGPoint(x: width * 0.4, y: height * 0.2))
-        path.addLine(to: CGPoint(x: width * 0.2, y: height * 0.3))
-        
-        path.move(to: CGPoint(x: width * 0.65, y: height * 0.35))
-        path.addLine(to: CGPoint(x: width * 0.8, y: height * 0.45))
-        
-        return path
-    }
-}
+// StormOverlay is now defined in WeatherViews.swift
 
 // Cloud layer for animated storm clouds
 struct CloudLayer: View {
@@ -6068,22 +5756,7 @@ struct StormClouds: View {
 }
 
 
-// Base cloud background
-struct CloudBase: View {
-    let opacity: Double
-    
-    var body: some View {
-        LinearGradient(
-            gradient: Gradient(colors: [
-                Color.white.opacity(opacity),
-                Color.white.opacity(opacity * 0.6)
-            ]),
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .opacity(0.3)
-    }
-}
+// CloudBase is now defined in WeatherViews.swift
 
 
 
@@ -6197,63 +5870,7 @@ private func getWeatherDescription(condition: WeatherCondition, isNightMode: Boo
 }
 
 
-struct CloudGroup: View {
-    let count: Int
-    let opacity: Double
-    let scale: CGFloat
-    let speed: Double
-    
-    @State private var cloudPositions: [(offsetX: CGFloat, offsetY: CGFloat, size: CGFloat)] = []
-    
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                ForEach(0..<count, id: \.self) { index in
-                    if index < cloudPositions.count {
-                        Cloud(opacity: opacity, speed: speed)
-                            .scaleEffect(cloudPositions[index].size * scale)
-                            .offset(x: cloudPositions[index].offsetX * geometry.size.width, 
-                                    y: cloudPositions[index].offsetY * geometry.size.height)
-                    }
-                }
-            }
-            .onAppear {
-                // Initialize cloud positions evenly distributed across the view
-                cloudPositions = (0..<count).map { index in
-                    let section = 1.0 / CGFloat(count)
-                    let offsetX = CGFloat(index) * section
-                    let offsetY = CGFloat.random(in: -0.2...0.2) // Slight vertical variation
-                    let size = CGFloat.random(in: 0.8...1.2) // Size variation
-                    return (offsetX: offsetX, offsetY: offsetY, size: size)
-                }
-            }
-        }
-    }
-}
-
-struct Cloud: View {
-    let opacity: Double
-    let speed: Double
-    @State private var pulse = false
-    
-    var body: some View {
-        Image(systemName: "cloud.fill")
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .frame(width: 80, height: 50)
-            .foregroundColor(.white.opacity(opacity))
-            .scaleEffect(pulse ? 1.03 : 1.0)
-            .animation(
-                Animation.easeInOut(duration: speed/10)
-                    .repeatForever(autoreverses: true),
-                value: pulse
-            )
-            .onAppear {
-                pulse = true
-            }
-            .blur(radius: 0.5) // Slight blur for soft edges
-    }
-}
+// CloudGroup and Cloud are now defined in WeatherViews.swift
 
 // Add the missing helper methods for LottieWeatherView
 
@@ -7040,24 +6657,21 @@ struct WeatherAnimationTestView: View {
                 ModernRainOverlay(intensity: .medium, nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .stormy:
-                StormOverlay()
+                LightningView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .snowy:
-                SnowOverlay()
+                SnowfallView(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .foggy:
-                FogOverlay()
+                ModernFogOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .cloudy:
-                CloudOverlay()
+                ModernFogOverlay(nightMode: isNight)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             case .partlyCloudy:
                 if isNight {
-                    ZStack(alignment: .top) {
-                        StarryNightOverlay()
-                        CloudOverlay(cloudiness: .partial)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    PartlyCloudyNightView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     // Time of day variations
                     let hour = Calendar.current.component(.hour, from: Date())
@@ -7071,11 +6685,8 @@ struct WeatherAnimationTestView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
                         // Regular daytime
-                        ZStack(alignment: .top) {
-                            SunRaysView(showSun: false)
-                            CloudOverlay(cloudiness: .partial)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        PartlyCloudyDayView()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     }
                 }
             case .clear, .unknown:
@@ -7431,31 +7042,6 @@ private struct StarryBackgroundView: View {
                         .opacity(Double.random(in: 0.2...0.5) * starOpacity)
                 }
             }
-        }
-    }
-}
-
-
-
-struct ShimmerWave: Shape {
-    var waveWidth: CGFloat
-    var waveHeight: CGFloat
-    
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: 0, y: rect.midY))
-            
-            // Create a wavy path
-            for i in stride(from: 0, to: waveWidth, by: 20) {
-                let y = sin(Double(i) / 20) * Double(waveHeight) + Double(rect.midY)
-                path.addLine(to: CGPoint(x: i, y: y))
-            }
-            
-            // Close the path
-            path.addLine(to: CGPoint(x: waveWidth, y: rect.midY))
-            path.addLine(to: CGPoint(x: waveWidth, y: rect.maxY))
-            path.addLine(to: CGPoint(x: 0, y: rect.maxY))
-            path.closeSubpath()
         }
     }
 }

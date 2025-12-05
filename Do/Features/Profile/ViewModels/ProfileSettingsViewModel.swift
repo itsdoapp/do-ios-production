@@ -88,156 +88,208 @@ class ProfileSettingsViewModel: ObservableObject {
     
     // MARK: - Public Methods
     func loadUserData() {
-        guard let userId = user.userID else {
-            print("⚠️ [ProfileSettings] No userID available, cannot load profile data")
+        // Use UserIDResolver to get the best user ID (Parse ID first, then Cognito ID)
+        // This matches the strategy used in ProfileViewModel
+        guard let bestUserId = UserIDResolver.shared.getBestUserIdForAPI() else {
+            print("⚠️ [ProfileSettings] No userID available from UserIDResolver, cannot load profile data")
             // Try to get userID from CurrentUserService as fallback
             if let currentUserId = CurrentUserService.shared.userID {
                 print("🔄 [ProfileSettings] Using CurrentUserService userID: \(currentUserId)")
                 self.user = CurrentUserService.shared.user
                 // Retry with the updated user
-                guard let retryUserId = self.user.userID else {
+                guard let retryUserId = UserIDResolver.shared.getBestUserIdForAPI() else {
                     print("❌ [ProfileSettings] Still no userID after CurrentUserService fallback")
                     return
                 }
                 // Continue with retryUserId
-                loadUserDataForUserId(retryUserId)
+                loadUserDataWithResilientIdResolution()
             }
             return
         }
         
-        loadUserDataForUserId(userId)
+        loadUserDataWithResilientIdResolution()
     }
     
-    private func loadUserDataForUserId(_ userId: String) {
-        print("🔄 [ProfileSettings] Loading user data for userId: \(userId)")
+    private func loadUserDataWithResilientIdResolution() {
         isLoading = true
         
         Task {
-            do {
-                let profileResponse = try await ProfileAPIService.shared.fetchUserProfile(
-                    userId: userId,
-                    currentUserId: userId,
-                    includeFollowers: false,
-                    includeFollowing: false
-                )
-                
-                guard let userData = profileResponse.data?.user else {
-                    throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "User data not found"])
+            // Get all user IDs to try (for resilient profile fetching)
+            // This tries Parse ID first, then Cognito ID
+            let userIdsToTry = UserIDResolver.shared.getUserIdsForDataFetch(userModel: user)
+            
+            guard !userIdsToTry.isEmpty else {
+                print("❌ [ProfileSettings] No user IDs available for data fetch")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.showError("Failed to load user data: No user ID available")
                 }
+                return
+            }
+            
+            // Try fetching profile with each user ID until we get results
+            var profileResponse: UserProfileResponse?
+            var profileError: Error?
+            var successfulUserId: String?
+            
+            for userId in userIdsToTry {
+                do {
+                    print("🌐 [ProfileSettings] Trying to fetch profile with user ID: \(userId) (Parse ID: \(UserIDResolver.shared.isParseUserId(userId)))")
+                    let response = try await ProfileAPIService.shared.fetchUserProfile(
+                        userId: userId,
+                        currentUserId: userId,
+                        includeFollowers: false,
+                        includeFollowing: false
+                    )
+                    profileResponse = response
+                    successfulUserId = userId
+                    print("✅ [ProfileSettings] Successfully fetched profile using user ID: \(userId)")
+                    break
+                } catch {
+                    print("⚠️ [ProfileSettings] Error fetching profile with user ID \(userId): \(error.localizedDescription)")
+                    profileError = error
+                    // Continue to next user ID
+                }
+            }
+            
+            guard let profileResponse = profileResponse else {
+                print("❌ [ProfileSettings] Failed to fetch profile with all user IDs")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.showError("Failed to load user data: \(profileError?.localizedDescription ?? "Unknown error")")
+                }
+                return
+            }
+            
+            guard let userData = profileResponse.data?.user else {
+                print("❌ [ProfileSettings] User data not found in API response")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.showError("Failed to load user data: User data not found")
+                }
+                return
+            }
+            
+            print("✅ [ProfileSettings] Received user data from API:")
+            print("   - name: \(userData.name ?? "nil")")
+            print("   - username: \(userData.username ?? "nil")")
+            print("   - email: \(userData.email ?? "nil")")
+            print("   - bio: \(userData.bio ?? "nil")")
+            print("   - privacyToggle: \(userData.privacyToggle ?? false)")
+            print("   - profilePictureUrl: \(userData.profilePictureUrl ?? "nil")")
+            
+            // Check if API returned all nil values - if so, fallback to CurrentUserService
+            let hasApiData = userData.name != nil || userData.username != nil || userData.email != nil
                 
-                print("✅ [ProfileSettings] Received user data from API:")
-                print("   - name: \(userData.name ?? "nil")")
-                print("   - username: \(userData.username ?? "nil")")
-                print("   - email: \(userData.email ?? "nil")")
-                print("   - bio: \(userData.bio ?? "nil")")
-                print("   - privacyToggle: \(userData.privacyToggle ?? false)")
-                print("   - profilePictureUrl: \(userData.profilePictureUrl ?? "nil")")
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
                 
-                // Check if API returned all nil values - if so, fallback to CurrentUserService
-                let hasApiData = userData.name != nil || userData.username != nil || userData.email != nil
-                
-                await MainActor.run { [weak self] in
-                    guard let self = self else { return }
+                if !hasApiData {
+                    print("⚠️ [ProfileSettings] API returned all nil values, falling back to CurrentUserService")
+                    // Fallback to CurrentUserService data
+                    let currentUser = CurrentUserService.shared.user
+                    self.name = currentUser.name ?? ""
+                    self.username = currentUser.userName ?? ""
+                    self.bio = currentUser.bio ?? ""
+                    self.email = currentUser.email ?? ""
+                    self.originalEmail = self.email
+                    self.isPrivateAccount = currentUser.privacyToggle ?? false
                     
-                    if !hasApiData {
-                        print("⚠️ [ProfileSettings] API returned all nil values, falling back to CurrentUserService")
-                        // Fallback to CurrentUserService data
-                        let currentUser = CurrentUserService.shared.user
-                        self.name = currentUser.name ?? ""
-                        self.username = currentUser.userName ?? ""
-                        self.bio = currentUser.bio ?? ""
-                        self.email = currentUser.email ?? ""
-                        self.originalEmail = self.email
-                        self.isPrivateAccount = currentUser.privacyToggle ?? false
-                        
-                        // Also update local user model
-                        self.user.name = currentUser.name
-                        self.user.userName = currentUser.userName
-                        self.user.bio = currentUser.bio
-                        self.user.email = currentUser.email
-                        self.user.privacyToggle = currentUser.privacyToggle
-                        self.user.profilePictureUrl = currentUser.profilePictureUrl
-                        
-                        // Load profile image from CurrentUserService if available
-                        if let profileImage = currentUser.profilePicture {
-                            self.profileImage = profileImage
-                        } else if let profilePicUrl = currentUser.profilePictureUrl, !profilePicUrl.isEmpty {
-                            print("🔄 [ProfileSettings] Loading profile image from CurrentUserService URL: \(profilePicUrl)")
-                            Task {
-                                let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
-                                await MainActor.run {
-                                    self.profileImage = image
-                                    self.objectWillChange.send()
-                                }
+                    // Also update local user model
+                    self.user.name = currentUser.name
+                    self.user.userName = currentUser.userName
+                    self.user.bio = currentUser.bio
+                    self.user.email = currentUser.email
+                    self.user.privacyToggle = currentUser.privacyToggle
+                    self.user.profilePictureUrl = currentUser.profilePictureUrl
+                    
+                    // Extract subscription tier from CurrentUserService if available
+                    if let tier = currentUser.genieSubscriptionTier, !tier.isEmpty {
+                        let tierLower = tier.lowercased()
+                        self.subscriptionTier = tierLower
+                        // User is premium if they have any paid tier (athlete, champion, legend)
+                        let isPaidTier = tierLower == "athlete" || tierLower == "champion" || tierLower == "legend"
+                        self.isPremium = isPaidTier
+                        print("✅ [ProfileSettings] Extracted subscription tier from CurrentUserService: \(tierLower), isPremium: \(isPremium)")
+                    }
+                    
+                    // Load profile image from CurrentUserService if available
+                    if let profileImage = currentUser.profilePicture {
+                        self.profileImage = profileImage
+                    } else if let profilePicUrl = currentUser.profilePictureUrl, !profilePicUrl.isEmpty {
+                        print("🔄 [ProfileSettings] Loading profile image from CurrentUserService URL: \(profilePicUrl)")
+                        Task {
+                            let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
+                            await MainActor.run {
+                                self.profileImage = image
+                                self.objectWillChange.send()
+                            }
+                        }
+                    }
+                } else {
+                    // Update with fresh data from API
+                    self.name = userData.name ?? ""
+                    self.username = userData.username ?? "" // Handle optional username
+                    self.bio = userData.bio ?? ""
+                    self.email = userData.email ?? ""
+                    self.originalEmail = self.email
+                    self.isPrivateAccount = userData.privacyToggle ?? false
+                    
+                    // Update local user model
+                    self.user.name = userData.name
+                    self.user.userName = userData.username ?? "" // Handle optional username
+                    self.user.bio = userData.bio
+                    self.user.email = userData.email
+                    self.user.privacyToggle = userData.privacyToggle
+                    self.user.profilePictureUrl = userData.profilePictureUrl
+                    
+                    // Extract subscription tier from profile data if available
+                    if let tier = userData.genieSubscriptionTier, !tier.isEmpty {
+                        let tierLower = tier.lowercased()
+                        self.subscriptionTier = tierLower
+                        // User is premium if they have any paid tier (athlete, champion, legend)
+                        let isPaidTier = tierLower == "athlete" || tierLower == "champion" || tierLower == "legend"
+                        self.isPremium = isPaidTier
+                        print("✅ [ProfileSettings] Extracted subscription tier from profile: \(tierLower), isPremium: \(isPremium)")
+                    }
+                    
+                    // Load profile image from API response if available
+                    if let profilePicUrl = userData.profilePictureUrl, !profilePicUrl.isEmpty {
+                        print("🔄 [ProfileSettings] Loading profile image from URL: \(profilePicUrl)")
+                        Task {
+                            let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
+                            await MainActor.run {
+                                self.profileImage = image
+                                // Explicitly trigger UI update for image
+                                self.objectWillChange.send()
+                                print("✅ [ProfileSettings] Profile image loaded: \(image != nil ? "success" : "failed")")
                             }
                         }
                     } else {
-                        // Update with fresh data from API
-                        self.name = userData.name ?? ""
-                        self.username = userData.username ?? "" // Handle optional username
-                        self.bio = userData.bio ?? ""
-                        self.email = userData.email ?? ""
-                        self.originalEmail = self.email
-                        self.isPrivateAccount = userData.privacyToggle ?? false
-                        
-                        // Update local user model
-                        self.user.name = userData.name
-                        self.user.userName = userData.username ?? "" // Handle optional username
-                        self.user.bio = userData.bio
-                        self.user.email = userData.email
-                        self.user.privacyToggle = userData.privacyToggle
-                        self.user.profilePictureUrl = userData.profilePictureUrl
-                        
-                        // Load profile image from API response if available
-                        if let profilePicUrl = userData.profilePictureUrl, !profilePicUrl.isEmpty {
-                            print("🔄 [ProfileSettings] Loading profile image from URL: \(profilePicUrl)")
-                            Task {
-                                let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl)
-                                await MainActor.run {
-                                    self.profileImage = image
-                                    // Explicitly trigger UI update for image
-                                    self.objectWillChange.send()
-                                    print("✅ [ProfileSettings] Profile image loaded: \(image != nil ? "success" : "failed")")
-                                }
-                            }
-                        } else {
-                            print("⚠️ [ProfileSettings] No profile picture URL in API response")
-                        }
+                        print("⚠️ [ProfileSettings] No profile picture URL in API response")
                     }
-                    
-                    // Load subscription status from AWS
-                    Task {
-                        await self.loadSubscriptionStatus()
-                    }
-                    
-                    self.isLoading = false
-                    // Explicitly trigger UI update
-                    self.objectWillChange.send()
-                    print("✅ [ProfileSettings] Successfully loaded and updated user data")
                 }
-            } catch {
-                print("❌ [ProfileSettings] Error fetching user data from AWS: \(error.localizedDescription)")
-                print("   Error details: \(error)")
-                await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-                    self.isLoading = false
-                    // Only show error if we don't have initial data
-                    if self.name.isEmpty && self.username.isEmpty && self.email.isEmpty {
-                        print("❌ [ProfileSettings] No initial data available, showing error")
-                        self.showError("Failed to load user data: \(error.localizedDescription)")
-                    } else {
-                        print("⚠️ [ProfileSettings] Using cached/initial data due to API error")
-                        print("   Current values - name: '\(self.name)', username: '\(self.username)', email: '\(self.email)'")
-                    }
-                    // Explicitly trigger UI update even on error
-                    self.objectWillChange.send()
+                
+                // Load subscription status from AWS
+                Task {
+                    await self.loadSubscriptionStatus()
                 }
+                
+                self.isLoading = false
+                // Explicitly trigger UI update
+                self.objectWillChange.send()
+                print("✅ [ProfileSettings] Successfully loaded and updated user data")
             }
         }
     }
     
     func saveChanges() {
-        guard let userId = user.userID else { return }
+        // Use UserIDResolver to get the best user ID (Parse ID first, then Cognito ID)
+        guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
+            print("⚠️ [ProfileSettings] No userID available for saving changes")
+            showError("Failed to save: No user ID available")
+            return
+        }
         isLoading = true
         
         // Validate email if changed
@@ -251,30 +303,103 @@ class ProfileSettingsViewModel: ObservableObject {
         
         Task {
             do {
-                // Build update fields
+                print("💾 [ProfileSettings] Starting save with userId: \(userId)")
+                print("💾 [ProfileSettings] Fields to save:")
+                print("   - name: \(name)")
+                print("   - username: \(username.lowercased())")
+                print("   - bio: \(bio.isEmpty ? "(empty)" : bio.prefix(50))")
+                print("   - email: \(email)")
+                print("   - privacyToggle: \(isPrivateAccount)")
+                
+                // Validate required fields
+                guard !name.isEmpty else {
+                    print("❌ [ProfileSettings] Name cannot be empty")
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.showError("Name is required")
+                    }
+                    return
+                }
+                
+                guard !username.isEmpty else {
+                    print("❌ [ProfileSettings] Username cannot be empty")
+                    await MainActor.run {
+                        self.isLoading = false
+                        self.showError("Username is required")
+                    }
+                    return
+                }
+                
+                // Build update fields - only include non-empty values
                 var fields: [String: Any] = [
-                    "name": name,
-                    "username": username.lowercased(),
-                    "bio": bio,
-                    "email": email,
+                    "name": name.trimmingCharacters(in: .whitespacesAndNewlines),
+                    "username": username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines),
+                    "email": email.trimmingCharacters(in: .whitespacesAndNewlines),
                     "privacyToggle": isPrivateAccount
                 ]
                 
+                // Only include bio if it's not empty
+                if !bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    fields["bio"] = bio.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    // Send empty string to clear bio if user cleared it
+                    fields["bio"] = ""
+                }
+                
                 // Update AWS DynamoDB
+                print("💾 [ProfileSettings] Calling ProfileAPIService.updateUserProfile...")
                 let updatedUser = try await ProfileAPIService.shared.updateUserProfile(
                     userId: userId,
                     fields: fields
                 )
                 
+                print("✅ [ProfileSettings] Successfully saved to backend")
+                print("✅ [ProfileSettings] Received updated user from API:")
+                print("   - name: \(updatedUser.name ?? "nil")")
+                print("   - username: \(updatedUser.username ?? "nil")")
+                print("   - bio: \(updatedUser.bio ?? "nil")")
+                print("   - email: \(updatedUser.email ?? "nil")")
+                
                 // Update local user model
                 await MainActor.run { [weak self] in
                     guard let self = self else { return }
                     
+                    // Update local user model in view model
                     self.user.name = updatedUser.name
                     self.user.userName = updatedUser.username ?? "" // Handle optional username
                     self.user.bio = updatedUser.bio
                     self.user.email = updatedUser.email
                     self.user.privacyToggle = updatedUser.privacyToggle
+                    // Preserve profile picture URL if it exists
+                    if self.user.profilePictureUrl == nil {
+                        self.user.profilePictureUrl = updatedUser.profilePictureUrl
+                    }
+                    
+                    // CRITICAL: Update CurrentUserService so changes persist across the app
+                    var updatedCurrentUser = CurrentUserService.shared.user
+                    updatedCurrentUser.name = updatedUser.name
+                    updatedCurrentUser.userName = updatedUser.username ?? ""
+                    updatedCurrentUser.bio = updatedUser.bio
+                    updatedCurrentUser.email = updatedUser.email
+                    updatedCurrentUser.privacyToggle = updatedUser.privacyToggle
+                    // Preserve subscription tier if it exists (shouldn't change from profile update)
+                    if updatedCurrentUser.genieSubscriptionTier == nil {
+                        updatedCurrentUser.genieSubscriptionTier = self.user.genieSubscriptionTier
+                    }
+                    // Preserve profile picture if it exists
+                    if updatedCurrentUser.profilePicture == nil {
+                        updatedCurrentUser.profilePicture = self.user.profilePicture
+                    }
+                    if updatedCurrentUser.profilePictureUrl == nil {
+                        updatedCurrentUser.profilePictureUrl = updatedUser.profilePictureUrl
+                    }
+                    
+                    CurrentUserService.shared.updateUser(updatedCurrentUser)
+                    print("✅ [ProfileSettings] Updated CurrentUserService - changes will persist across app")
+                    
+                    // Clear ProfileViewModel cache so it refreshes with new data
+                    ProfileViewModel.clearCacheForUser(userId)
+                    print("✅ [ProfileSettings] Cleared ProfileViewModel cache for refresh")
                     
                     // Reload subscription status after save
                     Task {
@@ -285,10 +410,32 @@ class ProfileSettingsViewModel: ObservableObject {
                     self.showSuccess("Profile updated successfully")
                 }
             } catch {
-                print("❌ Error saving user data to AWS: \(error)")
-                await MainActor.run {
+                print("❌ [ProfileSettings] Error saving user data to AWS: \(error)")
+                if let networkError = error as? NetworkError {
+                    switch networkError {
+                    case .httpError(let statusCode, let message):
+                        print("❌ [ProfileSettings] HTTP \(statusCode): \(message ?? "Unknown error")")
+                    case .invalidResponse(let message):
+                        print("❌ [ProfileSettings] Invalid response: \(message)")
+                    case .invalidURL:
+                        print("❌ [ProfileSettings] Invalid URL")
+                    case .unauthorized:
+                        print("❌ [ProfileSettings] Unauthorized - please sign in")
+                    case .serverError(let code, let message):
+                        print("❌ [ProfileSettings] Server error \(code): \(message ?? "Unknown error")")
+                    case .decodingError(let error):
+                        print("❌ [ProfileSettings] Decoding error: \(error.localizedDescription)")
+                    case .noData:
+                        print("❌ [ProfileSettings] No data received")
+                    case .requestFailed(let error):
+                        print("❌ [ProfileSettings] Request failed: \(error.localizedDescription)")
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
                     self.isLoading = false
-                    self.showError("Failed to save changes")
+                    let errorMessage = (error as? NetworkError)?.localizedDescription ?? "Failed to save changes. Please try again."
+                    self.showError(errorMessage)
                 }
             }
         }
@@ -338,48 +485,95 @@ class ProfileSettingsViewModel: ObservableObject {
     }
     
     func logOut() {
-        // Sign out from Cognito
+        print("🚪 [ProfileSettings] Logging out user...")
+        
+        // Clear all cached profile data
+        if let userId = UserIDResolver.shared.getBestUserIdForAPI() {
+            ProfileViewModel.clearCacheForUser(userId)
+            print("✅ [ProfileSettings] Cleared profile cache")
+        }
+        
+        // Clear CurrentUserService (this also posts notification)
+        CurrentUserService.shared.clearUser()
+        print("✅ [ProfileSettings] Cleared CurrentUserService")
+        
+        // Sign out from Cognito (this clears keychain and calls AuthService.signOut)
         AWSCognitoAuth.shared.signOut()
         
-        // Clear any cached data
+        // Clear any additional cached data
         UserDefaults.standard.removeObject(forKey: "cognito_id_token")
         UserDefaults.standard.removeObject(forKey: "cognito_access_token")
         UserDefaults.standard.removeObject(forKey: "cognito_refresh_token")
         UserDefaults.standard.removeObject(forKey: "cognito_user_id")
+        UserDefaults.standard.removeObject(forKey: "username")
+        UserDefaults.standard.removeObject(forKey: "email")
+        UserDefaults.standard.removeObject(forKey: "name")
         UserDefaults.standard.synchronize()
+        
+        print("✅ [ProfileSettings] Logout complete - all data cleared")
         
         // Navigation will be handled by the hosting controller
     }
     
     func deleteAccount(reason: String) {
-        // TODO: Implement AWS-based account deletion
-        // For now, show error message
-        showError("Account deletion not yet implemented in AWS")
+        // Use UserIDResolver to get the best user ID
+        guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
+            print("⚠️ [ProfileSettings] No userID available for account deletion")
+            showError("Failed to delete account: No user ID available")
+            return
+        }
         
-        /* Remove when AWS delete API is ready
-        guard let userId = user.userID else { return }
         isLoading = true
+        print("🗑️ [ProfileSettings] Deleting account for userId: \(userId)")
+        print("🗑️ [ProfileSettings] Deletion reason: \(reason.isEmpty ? "(none provided)" : reason.prefix(100))")
         
         Task {
             do {
-                // TODO: Call AWS delete user Lambda
-                // For now, just sign out
-                AWSCognitoAuth.shared.signOut()
+                // Call AWS delete account Lambda via ProfileAPIService
+                let success = try await ProfileAPIService.shared.deleteAccount(
+                    userId: userId,
+                    reason: reason
+                )
                 
-                await MainActor.run {
-                    self.isLoading = false
-                    self.showSuccess("Account deleted successfully")
-                    // Navigation will be handled by the hosting controller
+                if success {
+                    // Clear all local data on successful deletion
+                    await MainActor.run {
+                        // Clear profile cache
+                        ProfileViewModel.clearCacheForUser(userId)
+                        
+                        // Clear CurrentUserService
+                        CurrentUserService.shared.clearUser()
+                        
+                        // Sign out (clears keychain and tokens)
+                        AWSCognitoAuth.shared.signOut()
+                        
+                        // Clear UserDefaults
+                        UserDefaults.standard.removeObject(forKey: "cognito_id_token")
+                        UserDefaults.standard.removeObject(forKey: "cognito_access_token")
+                        UserDefaults.standard.removeObject(forKey: "cognito_refresh_token")
+                        UserDefaults.standard.removeObject(forKey: "cognito_user_id")
+                        UserDefaults.standard.removeObject(forKey: "username")
+                        UserDefaults.standard.removeObject(forKey: "email")
+                        UserDefaults.standard.removeObject(forKey: "name")
+                        UserDefaults.standard.synchronize()
+                        
+                        self.isLoading = false
+                        self.showSuccess("Account deleted successfully")
+                        print("✅ [ProfileSettings] Account deletion complete - all data cleared")
+                    }
+                } else {
+                    throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Delete failed"])
                 }
             } catch {
-                print("❌ Error deleting account: \(error)")
-                await MainActor.run {
+                print("❌ [ProfileSettings] Error deleting account: \(error)")
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
                     self.isLoading = false
-                    self.showError("Failed to delete account")
+                    let errorMessage = (error as? NetworkError)?.localizedDescription ?? "Failed to delete account. Please try again."
+                    self.showError(errorMessage)
                 }
             }
         }
-        */
     }
     
     // MARK: - Private Methods

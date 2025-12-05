@@ -561,6 +561,21 @@ struct GenieView: View {
                     }
                 }
             }
+            .task {
+                // Listen for token balance updates from any query (text, image, video)
+                for await notification in NotificationCenter.default.notifications(named: NSNotification.Name("TokenBalanceUpdated")) {
+                    if let userInfo = notification.userInfo,
+                       let balance = userInfo["balance"] as? Int,
+                       let tokensUsed = userInfo["tokensUsed"] as? Int {
+                        print("🧞 [GenieView] TokenBalanceUpdated notification received: balance=\(balance), used=\(tokensUsed)")
+                        await MainActor.run {
+                            let previousBalance = viewModel.tokenBalance
+                            viewModel.tokenBalance = max(0, balance)
+                            print("🧞 [GenieView] 💰 Balance updated via notification: \(previousBalance) → \(viewModel.tokenBalance)")
+                        }
+                    }
+                }
+            }
             // Simplified sheet state sync - only sync when sheet is dismissed
             .onChange(of: sheetCoordinator.activeSheet) { sheet in
                 // Only update local state when sheet is dismissed to minimize work
@@ -598,12 +613,9 @@ struct GenieView: View {
                     print("✅ [GenieView] ActionHandler subscriptions setup complete")
                 }
                 
-                // Load token balance in background (non-blocking, low priority)
-                // This ensures balance appears eventually without blocking UI
-                Task.detached(priority: .utility) {
-                    // Wait a bit to let UI render first
-                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
-                    
+                // Load token balance immediately (non-blocking)
+                // This ensures balance appears quickly without blocking UI
+                Task.detached(priority: .userInitiated) {
                     await MainActor.run {
                         // Check if user needs initialization
                         let hasInitialized = UserDefaults.standard.bool(forKey: "genie_initialized")
@@ -617,18 +629,17 @@ struct GenieView: View {
                                     print("🧞 [Genie] ✅ User initialized with free tokens")
                                     
                                     // Load balance after initialization
-                                    viewModel.loadBalance()
+                                    viewModel.loadBalance(clearCache: true)
                                 } catch {
                                     print("🧞 [Genie] ❌ Error initializing user: \(error)")
-                                    // Still try to load balance in case user was already initialized
+                                    // Still try to load balance even if initialization fails
                                     viewModel.loadBalance()
                                 }
                             }
                         } else {
-                            // User already initialized, just load balance
-                            if viewModel.tokenBalance == 0 {
-                                viewModel.loadBalance()
-                            }
+                            // User already initialized, just load balance immediately
+                            print("🧞 [Genie] User already initialized - loading balance...")
+                            viewModel.loadBalance()
                         }
                     }
                 }
@@ -730,7 +741,7 @@ struct GenieView: View {
             // Token balance (tappable) - load balance lazily in background
             Button(action: {
                 // Load balance in background if not loaded (non-blocking)
-                if viewModel.tokenBalance == 0 {
+                if viewModel.tokenBalance == -1 {
                     Task.detached(priority: .utility) {
                         await MainActor.run {
                             viewModel.loadBalance()
@@ -742,7 +753,7 @@ struct GenieView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 12))
-                    Text(viewModel.tokenBalance == 0 ? "..." : "\(viewModel.tokenBalance)")
+                    Text(viewModel.tokenBalance == -1 ? "..." : "\(viewModel.tokenBalance)")
                         .font(.system(size: 14, weight: .semibold))
                 }
                 .foregroundColor(tokenBalanceColor)
@@ -754,6 +765,16 @@ struct GenieView: View {
                 )
             }
             .buttonStyle(.plain)
+            .onAppear {
+                // Load balance immediately when button appears (if not already loaded)
+                if viewModel.tokenBalance == -1 {
+                    Task.detached(priority: .userInitiated) {
+                        await MainActor.run {
+                            viewModel.loadBalance()
+                        }
+                    }
+                }
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
@@ -789,10 +810,8 @@ struct GenieView: View {
                             .padding(.horizontal, 32)
                         
                         // AI-powered suggestion chips (fallback shown immediately, AI updates when ready)
-                        LazyVGrid(columns: [
-                            GridItem(.flexible(), spacing: 12),
-                            GridItem(.flexible(), spacing: 12)
-                        ], spacing: 12) {
+                        // Full-width layout - each card takes full width
+                        VStack(spacing: 12) {
                             ForEach(suggestionService.suggestions, id: \.self) { suggestion in
                                 suggestionChip(suggestion)
                             }
@@ -1695,7 +1714,7 @@ enum QueryLoadingState: Equatable {
 
 class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
-    @Published var tokenBalance: Int = 0
+    @Published var tokenBalance: Int = -1 // -1 indicates not loaded
     @Published var isLoading = false
     @Published var loadingState: QueryLoadingState = .idle
     @Published var balanceWarning: BalanceWarning?
@@ -1866,9 +1885,31 @@ class ChatViewModel: ObservableObject {
                 print("🧞 [Genie] Tokens used: \(response.tokensUsed)")
                 print("🧞 [Genie] Tokens remaining: \(response.tokensRemaining)")
                 
-                await MainActor.run {
-                    // Clear thinking trace now that response has arrived
-                    currentThinking = []
+                    // CRITICAL: Update token balance immediately after receiving response
+                    // This ensures the UI reflects the new balance right away
+                    await MainActor.run {
+                        let previousBalance = self.tokenBalance
+                        let newBalance = max(0, response.tokensRemaining) // Ensure non-negative
+                        self.tokenBalance = newBalance
+                        print("🧞 [Genie] 💰 Token balance updated: \(previousBalance) → \(newBalance) (used: \(response.tokensUsed))")
+                        
+                        // Verify balance makes sense (should decrease if tokens were used)
+                        if response.tokensUsed > 0 && previousBalance >= 0 {
+                            let expectedBalance = previousBalance - response.tokensUsed
+                            if abs(newBalance - expectedBalance) > 1 {
+                                print("⚠️ [Genie] Balance mismatch detected! Expected: \(expectedBalance), Got: \(newBalance). Refreshing from server...")
+                                // Refresh balance from server to ensure accuracy
+                                Task {
+                                    try? await Task.sleep(nanoseconds: 500_000_000) // Small delay
+                                    await MainActor.run {
+                                        self.loadBalance(clearCache: true)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Clear thinking trace now that response has arrived
+                        currentThinking = []
                     
                     // Handle actions from agent and generate user-friendly responses
                     if let actions = response.actions, !actions.isEmpty {
@@ -2032,7 +2073,8 @@ class ChatViewModel: ObservableObject {
                         }
                     }
                     
-                    tokenBalance = response.tokensRemaining
+                    // Balance already updated above - no need to update again here
+                    // tokenBalance = response.tokensRemaining (removed - already updated)
                     
                     // Update conversation title if provided in response
                     if let title = response.title, !title.isEmpty,
@@ -2075,6 +2117,14 @@ class ChatViewModel: ObservableObject {
                     // Handle insufficient tokens with smart upsell
                     if case .insufficientTokens(let data) = error {
                         print("🧞 [Genie] 💰 Insufficient tokens - showing upsell")
+                        print("🧞 [Genie] 💰 Actual balance from server: \(data.balance), required: \(data.required)")
+                        
+                        // CRITICAL: Update token balance immediately with actual balance from error response
+                        // The cache was stale, so we use the server's actual balance
+                        let previousBalance = self.tokenBalance
+                        self.tokenBalance = max(0, data.balance)
+                        print("🧞 [Genie] 💰 Updated balance from error response: \(previousBalance) → \(self.tokenBalance)")
+                        
                         // Don't remove user message - keep it visible so user knows what they asked
                         // Show error message with helpful context
                         let errorMessage = ChatMessage(

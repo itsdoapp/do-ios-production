@@ -177,8 +177,8 @@ struct WalkingWorkoutView: View {
     
     private func actuallyStartWorkout() {
         workoutStartTime = Date()
-        workoutCoordinator.startWorkout(type: .walking)
-        healthKitManager.startWorkout(type: .walking)
+        workoutCoordinator.startWorkout(type: WorkoutType.walking)
+        healthKitManager.startWorkout(type: WorkoutType.walking)
         isRunning = true
         startTimer()
         LiveMetricsSync.shared.startLiveSync()

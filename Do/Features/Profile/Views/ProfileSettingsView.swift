@@ -237,17 +237,43 @@ struct ProfileSettingsView: View {
     
     private func bioField(title: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.7))
+            HStack {
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+                // Character count
+                Text("\(text.wrappedValue.count)/150")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundColor(.white.opacity(0.5))
+            }
             
-            TextField("Tell us about yourself", text: text, axis: .vertical)
-                .font(.system(size: 16, weight: .regular))
-                .foregroundColor(.white)
-                .lineLimit(3, reservesSpace: true)
-                .padding()
-                .background(Color.white.opacity(0.1))
-                .cornerRadius(12)
+            ZStack(alignment: .topLeading) {
+                // Placeholder text (shown when bio is empty)
+                if text.wrappedValue.isEmpty {
+                    Text("Tell us about yourself")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding()
+                }
+                
+                // Actual text field with character limit
+                TextField("", text: Binding(
+                    get: { text.wrappedValue },
+                    set: { newValue in
+                        // Limit to 150 characters
+                        if newValue.count <= 150 {
+                            text.wrappedValue = newValue
+                        }
+                    }
+                ), axis: .vertical)
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.white)
+                    .lineLimit(3, reservesSpace: true)
+                    .padding()
+            }
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(12)
         }
     }
     

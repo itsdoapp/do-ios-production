@@ -180,21 +180,21 @@ struct RunningWorkoutView: View {
     
     // Extracted Metrics View
     private var metricsView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             // Header with enhanced icon
-            HStack {
+            HStack(spacing: 6) {
                 ZStack {
                     Circle()
                         .fill(Color.brandOrange.opacity(0.2))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 20, height: 20)
                     
-                    Image(systemName: "figure.run")
-                        .font(.system(size: 12, weight: .bold))
+                    Image(systemName: isIndoor ? "figure.run.circle" : "figure.run")
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundColor(Color.brandOrange)
                 }
                 
-                Text("RUNNING")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                Text(isIndoor ? "INDOOR RUN" : "OUTDOOR RUN")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundColor(.gray)
                 
                 Spacer()
@@ -203,12 +203,12 @@ struct RunningWorkoutView: View {
                     ZStack {
                         Circle()
                             .fill(Color.green)
-                            .frame(width: 8, height: 8)
+                            .frame(width: 6, height: 6)
                             .opacity(liveIndicatorOpacity)
                         
                         Circle()
-                            .stroke(Color.green.opacity(0.3), lineWidth: 2)
-                            .frame(width: 16, height: 16)
+                            .stroke(Color.green.opacity(0.3), lineWidth: 1.5)
+                            .frame(width: 12, height: 12)
                             .scaleEffect(liveIndicatorOpacity < 0.5 ? 1.5 : 1.0)
                             .opacity(liveIndicatorOpacity)
                     }
@@ -219,13 +219,13 @@ struct RunningWorkoutView: View {
                     }
                 }
             }
-            .padding(.horizontal)
-            .padding(.top, 4)
+            .padding(.horizontal, 12)
+            .padding(.top, 2)
             
             // Hero Metric (Distance)
             HeroMetric(
                 value: formatDistance(metrics.distance),
-                unit: settings.useMetric ? "KILOMETERS" : "MILES",
+                unit: settings.useMetric ? "KM" : "MI",
                 color: Color.brandOrange
             )
             
@@ -236,23 +236,23 @@ struct RunningWorkoutView: View {
                     averagePace: averagePace,
                     color: Color.brandOrange
                 )
-                .padding(.horizontal)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 2)
             }
             
             // Stats Grid
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
                     StatBox(label: "TIME", value: metrics.formattedTime(), color: .white)
                     StatBox(label: "PACE", value: formatPace(metrics.pace), color: .white)
                 }
                 
-                HStack(spacing: 8) {
-                    StatBox(label: "HEART RATE", value: metrics.formattedHeartRate(), color: .red)
-                    StatBox(label: "CALORIES", value: metrics.formattedCalories(), color: .orange)
+                HStack(spacing: 6) {
+                    StatBox(label: "HR", value: metrics.formattedHeartRate(), color: .red)
+                    StatBox(label: "CAL", value: metrics.formattedCalories(), color: .orange)
                 }
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 12)
             
             // Heart Rate Zone Indicator (watchOS 9.0+)
             if isRunning && metrics.heartRate > 0 {
@@ -260,7 +260,7 @@ struct RunningWorkoutView: View {
                     currentZone: heartRateZoneService.currentZone,
                     heartRate: metrics.heartRate
                 )
-                .padding(.horizontal)
+                .padding(.horizontal, 12)
                 .onChange(of: metrics.heartRate) { newHR in
                     healthKitManager.updateHeartRateZone(heartRate: newHR)
                 }
@@ -273,23 +273,23 @@ struct RunningWorkoutView: View {
                     WKInterfaceDevice.current().play(.click)
                 }) {
                     HStack {
-                        Text("ADVANCED METRICS")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                        Text("ADVANCED")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
                             .foregroundColor(.gray)
                         Spacer()
                         Image(systemName: showAdvancedMetrics ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 8))
+                            .font(.system(size: 7))
                             .foregroundColor(.gray)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal)
+                .padding(.horizontal, 12)
                 
                 if showAdvancedMetrics {
                     AdvancedMetricsView(metrics: advancedMetricsService.currentMetrics)
-                        .padding(.horizontal)
+                        .padding(.horizontal, 12)
                         .transition(.opacity)
                 }
             }
@@ -346,8 +346,8 @@ struct RunningWorkoutView: View {
     
     private func actuallyStartWorkout() {
         workoutStartTime = Date()
-        workoutCoordinator.startWorkout(type: .running, isIndoor: isIndoor)
-        healthKitManager.startWorkout(type: .running, isIndoor: isIndoor) // Start HealthKit tracking with location type
+        workoutCoordinator.startWorkout(type: WorkoutType.running)
+        healthKitManager.startWorkout(type: WorkoutType.running, isIndoor: isIndoor) // Start HealthKit tracking with location type
         isRunning = true
         startTimer()
         LiveMetricsSync.shared.startLiveSync()

@@ -1,4 +1,5 @@
 import Foundation
+import MediaPlayer
 import AVFoundation
 
 class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
@@ -14,6 +15,11 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
     @Published var currentSpokenText: String = "" // Track current text being spoken
     @Published var currentSegmentIndex: Int = 0 // Track which segment is being spoken
     @Published var currentPlaybackTime: TimeInterval = 0 // Track actual audio playback time
+    
+    // Expose player rate for lock screen verification
+    var playerRate: Float {
+        return audioPlayer?.rate ?? 0.0
+    }
     
     // Store fallback info in case Polly audio fails
     private var fallbackScript: String?
@@ -34,13 +40,25 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
         fallbackAmbientType = ambientType
         
         print("🔊 [MeditationAudio] playMeditationAudio called")
-        print("🔊 [MeditationAudio] audioUrl: \(audioUrl ?? "nil")")
-        print("🔊 [MeditationAudio] script length: \(script.count) chars")
+        
+        // Start ambient background audio IMMEDIATELY if specified
+        // This provides immediate feedback and ensures audio session/lock screen is active while TTS generates
+        if let ambientType = ambientType {
+            print("🔊 [MeditationAudio] Starting ambient audio immediately...")
+            Task { @MainActor in
+                // Configure audio session first
+                self.configureAudioSessionForPlayback()
+                AmbientAudioService.shared.startAmbientSound(ambientType, volume: 0.12)
+            }
+        } else {
+            // Even if no ambient, configure session to be ready
+            self.configureAudioSessionForPlayback()
+        }
         
         // Priority 1: Use provided audioUrl if available (from backend)
         if let audioUrlString = audioUrl, !audioUrlString.isEmpty, let url = URL(string: audioUrlString) {
             print("🔊 [MeditationAudio] ✅ Using provided audio URL: \(url.absoluteString.prefix(100))...")
-            playPollyAudio(url: url, ambientType: ambientType)
+            playPollyAudio(url: url, ambientType: nil) // Ambient already started
             return
         }
         
@@ -56,7 +74,7 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
             ) {
                 await MainActor.run {
                     print("✅ [MeditationAudio] Polly Neural TTS generated successfully")
-                    self.playPollyAudio(url: URL(string: generatedUrl)!, ambientType: ambientType)
+                    self.playPollyAudio(url: URL(string: generatedUrl)!, ambientType: nil) // Ambient already started
                 }
             } else {
                 // Polly TTS failed - do not fallback, show error instead
@@ -65,6 +83,26 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
                     // TODO: Show error to user instead of falling back
                 }
             }
+        }
+    }
+    
+    /// Configure audio session for playback
+    private func configureAudioSessionForPlayback() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            // Use .playback mode with .default options to allow lock screen media player
+            try audioSession.setCategory(
+                .playback,
+                mode: .default,
+                options: [.mixWithOthers, .duckOthers, .allowBluetooth]
+            )
+            // Activate if not already active
+            if !audioSession.isOtherAudioPlaying {
+                try audioSession.setActive(true, options: [])
+                print("🔊 [MeditationAudio] Audio session activated for playback")
+            }
+        } catch {
+            print("❌ [MeditationAudio] Failed to configure audio session: \(error)")
         }
     }
     
@@ -103,15 +141,50 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
             }
         }
         
-        // Configure audio session for optimal meditation audio
-        // Use .spokenAudio mode for better speech clarity
+        // Configure audio session for optimal meditation audio with background playback
+        // Use .default mode (not .spokenAudio) to allow lock screen media player to show
+        // .spokenAudio mode prevents lock screen from appearing
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers, .duckOthers])
-            try audioSession.setActive(true)
-            print("🔊 [MeditationAudio] Audio session configured successfully")
+            // Check if lock screen is already set up - if so, use .playback with .default mode
+            // Otherwise use .spokenAudio for better speech clarity
+            let hasLockScreenSetup = MPNowPlayingInfoCenter.default().nowPlayingInfo != nil
+            
+            // Only reconfigure if needed to avoid conflicts
+            let needsReconfig = audioSession.category != .playback || 
+                               (hasLockScreenSetup && audioSession.mode != .default) ||
+                               (!hasLockScreenSetup && audioSession.mode != .spokenAudio)
+            
+            if needsReconfig {
+                if hasLockScreenSetup {
+                    // Lock screen is set up - use .default mode to allow it to show
+                    try audioSession.setCategory(
+                        .playback,
+                        mode: .default,
+                        options: [.mixWithOthers, .duckOthers, .allowBluetooth]
+                    )
+                    print("🔊 [MeditationAudio] Audio session configured with .default mode for lock screen")
+                } else {
+                    // No lock screen setup - use .spokenAudio for better speech clarity
+                    try audioSession.setCategory(
+                        .playback,
+                        mode: .spokenAudio,
+                        options: [.mixWithOthers, .duckOthers, .allowBluetooth]
+                    )
+                    print("🔊 [MeditationAudio] Audio session configured with .spokenAudio mode")
+                }
+            }
+            
+            // Only activate if not already active to avoid conflicts
+            if !audioSession.isOtherAudioPlaying {
+                try audioSession.setActive(true, options: [])
+                print("🔊 [MeditationAudio] Audio session activated for background playback")
+            } else {
+                print("🔊 [MeditationAudio] Audio session already active (other audio playing)")
+            }
         } catch {
             print("❌ [MeditationAudio] Failed to configure audio session: \(error)")
+            // Don't fail completely - audio might still play
         }
         
         // Create AVPlayer for Polly audio
@@ -191,6 +264,8 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
                 Task { @MainActor in
                     AmbientAudioService.shared.setVolume(0.06) // Duck to 6% when speech is playing
                 }
+                // Post notification that audio is ready (for lock screen setup)
+                NotificationCenter.default.post(name: NSNotification.Name("MeditationAudioReady"), object: nil)
             case .failed:
                 print("❌ [MeditationAudio] Polly audio failed to load")
                 if let error = item.error {
@@ -210,6 +285,8 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
                 if rate > 0 {
                     // Speech is playing - duck ambient
                     AmbientAudioService.shared.setVolume(0.06) // 6% when speech active
+                    // Post notification that audio is actually playing (for lock screen)
+                    NotificationCenter.default.post(name: NSNotification.Name("MeditationAudioPlaying"), object: nil)
                 } else {
                     // Speech paused - restore ambient slightly
                     AmbientAudioService.shared.setVolume(0.10) // 10% when paused
@@ -261,13 +338,17 @@ class MeditationAudioService: NSObject, ObservableObject, AVSpeechSynthesizerDel
             }
         }
         
-        // Configure audio session to mix with ambient audio
+        // Configure audio session to mix with ambient audio and support background playback
         // Use .spokenAudio mode for better speech clarity during meditation
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers, .duckOthers])
-            try audioSession.setActive(true)
-            print("🔊 [MeditationAudio] Audio session configured successfully")
+            try audioSession.setCategory(
+                .playback,
+                mode: .spokenAudio,
+                options: [.mixWithOthers, .duckOthers, .allowBluetooth]
+            )
+            try audioSession.setActive(true, options: [])
+            print("🔊 [MeditationAudio] Audio session configured successfully for background playback")
         } catch {
             print("❌ [MeditationAudio] Failed to configure audio session: \(error)")
         }

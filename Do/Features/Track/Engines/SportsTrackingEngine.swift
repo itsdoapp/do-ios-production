@@ -304,8 +304,8 @@ class SportsTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
             self.totalPausedDuration = 0
             self.pausedTime = 0
             
-            // Request location permissions (use ModernLocationManager to avoid UI warnings)
-            ModernLocationManager.shared.requestAlwaysAuthorization()
+            // Request location permissions
+            self.locationManager?.requestAlwaysAuthorization()
             
             // Start location updates
             let authStatus = CLLocationManager.authorizationStatus()

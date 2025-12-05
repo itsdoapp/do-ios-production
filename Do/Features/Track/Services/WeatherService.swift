@@ -25,10 +25,10 @@ class WeatherService: ObservableObject {
     private var currentWeatherResponse: MetNoResponse?
     
     // Cache management
-    private var lastWeatherFetchTime: Date?
+    var lastWeatherFetchTime: Date? // Made public for cache checking
     private var cachedForecastTemperatures: [Double]?
     private var cachedForecastConditions: [WeatherCondition]?
-    private var lastLocation: CLLocation?
+    var lastLocation: CLLocation? // Made public for cache checking
     private let cacheExpirationInterval: TimeInterval = 3600 // 1 hour in seconds
     // Add at top of class
     private var previouslyMappedSymbols: Set<String> = []
@@ -46,6 +46,8 @@ class WeatherService: ObservableObject {
     /// - Parameter location: The location to get weather for
     /// - Returns: A tuple containing the weather data and an optional error
     func fetchWeather(for location: CLLocation) async -> (WeatherData?, Error?) {
+        print("🌤️ WeatherService.fetchWeather called for location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        
         // Check if we have valid cached data
         PerformanceLogger.start("Weather:fetch")
         if let lastFetchTime = lastWeatherFetchTime,
@@ -54,17 +56,21 @@ class WeatherService: ObservableObject {
            Date().timeIntervalSince(lastFetchTime) < cacheExpirationInterval,
            location.distance(from: lastLoc) < 1000 { // Only use cache if within 1km
             
+            print("✅ WeatherService: Using cached weather data")
             PerformanceLogger.end("Weather:fetch", extra: "cache hit (<1km & <1h)")
             return (cachedWeather, nil)
         }
         
+        print("🌤️ WeatherService: No valid cache, fetching from network...")
         await MainActor.run {
             isLoading = true
         }
         
         do {
             PerformanceLogger.start("Weather:network")
+            print("🌤️ WeatherService: Calling getWeatherFromMetNo...")
             let weatherDataFetched = try await getWeatherFromMetNo(for: location)
+            print("✅ WeatherService: getWeatherFromMetNo succeeded")
             PerformanceLogger.end("Weather:network")
             
             // Update UI state on main thread
@@ -76,6 +82,7 @@ class WeatherService: ObservableObject {
             }
             
             PerformanceLogger.end("Weather:fetch", extra: "network")
+            print("✅ WeatherService.fetchWeather: Returning weather data - temp: \(weatherDataFetched.temperature)°C, condition: \(weatherDataFetched.condition)")
             return (weatherDataFetched, nil)
         } catch {
             print("Weather fetch error: \(error.localizedDescription)")
@@ -189,6 +196,7 @@ func getForecastConditions(hours: Int = 24) -> [WeatherCondition]? {
         print("🔗 WeatherService: Using URL: \(urlString)")
         
         guard let url = URL(string: urlString) else {
+            print("❌ WeatherService: Invalid URL constructed")
             throw WeatherError.invalidURL
         }
         
@@ -200,8 +208,21 @@ func getForecastConditions(hours: Int = 24) -> [WeatherCondition]? {
         // Disable caching to ensure fresh data
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         
+        // Add timeout to prevent hanging
+        request.timeoutInterval = 10.0 // 10 second timeout
+        
+        print("📡 WeatherService: Starting network request with 10s timeout...")
+        
+        // Create URLSession with timeout configuration
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 10.0
+        config.timeoutIntervalForResource = 15.0
+        let session = URLSession(configuration: config)
+        
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            print("📡 WeatherService: Making async network request...")
+            let (data, response) = try await session.data(for: request)
+            print("📡 WeatherService: Network request completed, received \(data.count) bytes")
             
             // Print raw response for debugging
             print("📡 WeatherService: Raw response data size: \(data.count) bytes")
@@ -266,13 +287,15 @@ func getForecastConditions(hours: Int = 24) -> [WeatherCondition]? {
             // Extract precipitation data
             let precipitationAmount = currentWeather.data.next_1_hours?.details?.precipitation_amount
             
-            // Log the actual temperature received from the API
+            // Use direct access to cloud_area_fraction since it's not optional
+            let cloudCoverage = details.cloud_area_fraction
+            
+            // Log the symbol code and cloud coverage for debugging
+            print("🌤️ WeatherService: Symbol code: \(symbolCode), Cloud coverage: \(cloudCoverage)%")
             
             // Calculate precipitation chance based on cloud coverage and conditions
             // This is an approximation since Met.no doesn't provide direct precipitation probability
             var precipChance: Double? = nil
-            // Use direct access to cloud_area_fraction since it's not optional
-            let cloudCoverage = details.cloud_area_fraction
             // Base chance on cloud coverage
             if cloudCoverage > 80 {
                 // High cloud coverage increases precipitation chance
@@ -300,10 +323,29 @@ func getForecastConditions(hours: Int = 24) -> [WeatherCondition]? {
                 precipChance = 0.7 // Default probability if we know there's precipitation
             }
             
+            // Map weather condition from symbol code
+            var mappedCondition = mapToWeatherCondition(from: symbolCode)
+            
+            // Override condition based on cloud coverage if needed
+            // If cloud coverage is significant, adjust the condition accordingly
+            if cloudCoverage > 75 && mappedCondition == .clear {
+                // High cloud coverage should be cloudy, not clear
+                mappedCondition = .cloudy
+                print("🌤️ WeatherService: Overriding clear to cloudy due to high cloud coverage (\(cloudCoverage)%)")
+            } else if cloudCoverage > 50 && cloudCoverage <= 75 && mappedCondition == .clear {
+                // Medium cloud coverage should be partly cloudy
+                mappedCondition = .partlyCloudy
+                print("🌤️ WeatherService: Overriding clear to partlyCloudy due to medium cloud coverage (\(cloudCoverage)%)")
+            } else if cloudCoverage > 25 && cloudCoverage <= 50 && mappedCondition == .clear {
+                // Low-medium cloud coverage should be partly cloudy
+                mappedCondition = .partlyCloudy
+                print("🌤️ WeatherService: Overriding clear to partlyCloudy due to low-medium cloud coverage (\(cloudCoverage)%)")
+            }
+            
             // Create the weather data object
             let weatherData = WeatherData(
                 temperature: details.air_temperature,
-                condition: mapToWeatherCondition(from: symbolCode),
+                condition: mappedCondition,
                 humidity: details.relative_humidity / 100.0, // Convert from percentage to decimal
                 windSpeed: details.wind_speed,
                 timestamp: Date(),
@@ -322,6 +364,10 @@ func getForecastConditions(hours: Int = 24) -> [WeatherCondition]? {
             return weatherData
         } catch let urlError as URLError {
             print("❌ WeatherService: URL error: \(urlError.localizedDescription)")
+            // Check if it's a timeout error
+            if urlError.code == .timedOut {
+                print("⏱️ WeatherService: Request timed out after 10 seconds")
+            }
             throw WeatherError.networkError(urlError)
         } catch {
             print("❌ WeatherService: General error: \(error.localizedDescription)")

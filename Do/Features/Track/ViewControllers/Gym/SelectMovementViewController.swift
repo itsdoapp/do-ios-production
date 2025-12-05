@@ -105,31 +105,116 @@ struct SelectMovementView: View {
     }
     
     private func loadMovements() {
-        guard let userId = CurrentUserService.shared.userID else {
+        let userIds = UserIDResolver.shared.getUserIdsForDataFetch()
+        guard !userIds.isEmpty else {
             isLoading = false
             return
         }
         
-        AWSWorkoutService.shared.getMovements(userId: userId, limit: 100) { result in
-            DispatchQueue.main.async {
-                isLoading = false
+        var allItems: [AWSWorkoutService.WorkoutItem] = []
+        var existingIds = Set<String>()
+        let dispatchGroup = DispatchGroup()
+        
+        // Load user's own movements from all IDs (Parse first, then Cognito)
+        for userId in userIds {
+            dispatchGroup.enter()
+            AWSWorkoutService.shared.getMovements(userId: userId, limit: 100) { result in
                 switch result {
                 case .success(let response):
-                    movements = (response.data ?? []).compactMap { item -> movement? in
-                        var mov = movement()
-                        mov.id = item.movementId ?? UUID().uuidString
-                        mov.movement1Name = item.movement1Name ?? item.name
-                        mov.movement2Name = item.movement2Name
-                        mov.isSingle = item.isSingle ?? true
-                        mov.isTimed = item.isTimed ?? false
-                        mov.category = item.category
-                        mov.difficulty = item.difficulty
-                        mov.description = item.description
-                        return mov
+                    if let items = response.data {
+                        DispatchQueue.main.async {
+                            let newItems = items.filter { item in
+                                guard let id = item.movementId else { return false }
+                                return !existingIds.contains(id)
+                            }
+                            for item in newItems {
+                                if let id = item.movementId {
+                                    existingIds.insert(id)
+                                }
+                            }
+                            allItems.append(contentsOf: newItems)
+                        }
                     }
                 case .failure(let error):
-                    print("❌ Error loading movements: \(error.localizedDescription)")
+                    print("❌ Error loading user movements for ID \(userId): \(error.localizedDescription)")
                 }
+                dispatchGroup.leave()
+            }
+        }
+        
+        // Also load public movements
+        dispatchGroup.enter()
+        AWSWorkoutService.shared.getMovements(userId: nil, isPublic: true, limit: 100) { result in
+            switch result {
+            case .success(let response):
+                if let items = response.data {
+                    DispatchQueue.main.async {
+                        let newItems = items.filter { item in
+                            guard let id = item.movementId else { return false }
+                            return !existingIds.contains(id)
+                        }
+                        for item in newItems {
+                            if let id = item.movementId {
+                                existingIds.insert(id)
+                            }
+                        }
+                        allItems.append(contentsOf: newItems)
+                    }
+                }
+            case .failure(let error):
+                print("❌ Error loading public movements: \(error.localizedDescription)")
+            }
+            dispatchGroup.leave()
+        }
+        
+        dispatchGroup.notify(queue: .main) {
+            self.isLoading = false
+            self.movements = allItems.compactMap { item -> movement? in
+                var mov = movement()
+                mov.id = item.movementId ?? UUID().uuidString
+                mov.movement1Name = item.movement1Name ?? item.name
+                mov.movement2Name = item.movement2Name
+                mov.isSingle = item.isSingle ?? true
+                mov.isTimed = item.isTimed ?? false
+                mov.category = item.category
+                mov.difficulty = item.difficulty
+                mov.description = item.description
+                
+                // Parse sets if available - handle both timed and rep-based sets
+                if let templateSets = item.templateSets {
+                    mov.templateSets = templateSets.compactMap { dict -> set? in
+                        var s = set()
+                        s.id = dict["id"] as? String ?? UUID().uuidString
+                        // For rep-based sets: use reps
+                        s.reps = dict["reps"] as? Int
+                        // For timed sets: use duration (may be stored as "sec" or "duration")
+                        if let duration = dict["duration"] as? Int {
+                            s.duration = duration
+                        } else if let sec = dict["sec"] as? Int {
+                            s.duration = sec
+                        }
+                        s.weight = dict["weight"] as? Double
+                        return s
+                    }
+                }
+                
+                // Also parse firstSectionSets, secondSectionSets, weavedSets if available
+                if let firstSectionSets = item.firstSectionSets {
+                    mov.firstSectionSets = firstSectionSets.compactMap { dict -> set? in
+                        var s = set()
+                        s.id = dict["id"] as? String ?? UUID().uuidString
+                        s.reps = dict["reps"] as? Int
+                        if let duration = dict["duration"] as? Int {
+                            s.duration = duration
+                        } else if let sec = dict["sec"] as? Int {
+                            s.duration = sec
+                        }
+                        s.weight = dict["weight"] as? Double
+                        return s
+                    }
+                }
+                
+                return mov
             }
         }
     }

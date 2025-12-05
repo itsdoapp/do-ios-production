@@ -33,8 +33,6 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     }
     
     // MARK: - Properties
-    // Add a debouncing mechanism
-    private var preferencesDebounceTimer: Timer?
     weak var categoryDelegate: CategorySelectionDelegate?
     public var hostingController: UIHostingController<HikeTrackerView>?
     public var hikeTracker = HikeTrackingEngine.shared
@@ -73,6 +71,10 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     private var lastSyncDataProcessTime = Date(timeIntervalSince1970: 0)
     private var pendingSyncMessages: [[String: Any]] = []
     
+    // Route loading cache
+    private var lastRouteLoadTime: Date?
+    private var lastRouteLoadLocation: CLLocation?
+    
     // MARK: - UI Outlets
     private var mapView: MKMapView!
     private var distanceLabel: UILabel!
@@ -80,6 +82,10 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     private var durationLabel: UILabel!
     private var caloriesLabel: UILabel!
     private var startStopButton: UIButton!
+    // Add a debouncing mechanism
+    private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousHikeType: HikeType?
     
 
     
@@ -87,7 +93,7 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     private let mainContainer: UIView = {
         let view = UIView()
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.backgroundColor = UIColor(hex: "#0A0F1E") // Darker, more premium background
+        view.backgroundColor = UIColor(hex: "#1a1a2e") // Match weather view night gradient for better color harmony
         return view
     }()
     
@@ -225,12 +231,6 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
             object: nil
         )
         
-        // Fetch initial weather data and routes
-        Task {
-            await loadWeatherData()
-            await fetchRoutes()
-            await loadHikingHistory()
-        }
         NotificationCenter.default.addObserver(self, selector: #selector(didUpdateNearbyTrails(_:)), name: .didUpdateNearbyTrails, object: nil)
     }
 
@@ -267,10 +267,16 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
         super.viewWillDisappear(animated)
         navigationController?.setNavigationBarHidden(false, animated: animated)
         UIApplication.shared.isIdleTimerDisabled = false
+        
+        // Stop watch sync when view disappears
+        stopWatchSync()
     }
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        
+        // End initial load timer immediately - view is now visible
+        PerformanceLogger.end("Track:initialLoad", extra: "view appeared")
         
         // Check and update hosting controller
         if let hostingView = hostingController?.view {
@@ -281,6 +287,84 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
         // Check for active watch workouts when the view appears
         print("📱 DIAGNOSTIC: ViewDidAppear called, checking for watch workouts...")
         checkForActiveWatchWorkouts()
+        
+        // Start periodic watch sync loop
+        startWatchSync()
+        
+        // Show cached data immediately if available
+        showCachedDataIfAvailable()
+        
+        // Load fresh data in background (non-blocking)
+        if !hasLoadedInitialData {
+            Task {
+                // Load weather and routes in parallel for faster loading
+                async let weatherTask = loadWeatherData()
+                async let routesTask = fetchRoutes()
+                
+                // Wait for weather and routes (critical for UI)
+                await weatherTask
+                await routesTask
+                
+                // Load history in background (non-critical, can be deferred)
+                Task.detached(priority: .utility) {
+                    await MainActor.run {
+                        self.loadHikingHistory()
+                    }
+                }
+            }
+            hasLoadedInitialData = true
+        }
+    }
+    
+    private var hasLoadedInitialData = false
+    private var watchSyncTimer: Timer?
+    
+    /// Starts a periodic sync to the watch pushing trackingStatus using the engine's updateApplicationContext (every 5s)
+    private func startWatchSync() {
+        // Invalidate any existing timer first
+        watchSyncTimer?.invalidate()
+        watchSyncTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            let session = WCSession.default
+            guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { return }
+            
+            // Delegate payload building and reliable sending to the engine (mirrors Run)
+            self.hikeTracker.updateApplicationContext()
+        }
+    }
+    
+    /// Stops the periodic watch sync
+    private func stopWatchSync() {
+        watchSyncTimer?.invalidate()
+        watchSyncTimer = nil
+    }
+    
+    /// Show cached weather and routes data immediately if available
+    private func showCachedDataIfAvailable() {
+        // Show cached weather if available and still valid
+        if let cachedWeather = weatherService.currentWeather,
+           let lastLocation = weatherService.lastLocation,
+           let lastFetchTime = weatherService.lastWeatherFetchTime,
+           Date().timeIntervalSince(lastFetchTime) < 3600, // Less than 1 hour old
+           let currentLocation = locationManager.location,
+           currentLocation.distance(from: lastLocation) < 1000 { // Within 1km
+            print("📦 Showing cached weather data immediately")
+            weatherCondition = cachedWeather.condition
+            temperature = cachedWeather.temperature
+            humidity = cachedWeather.humidity
+            windSpeed = cachedWeather.windSpeed
+            let isNight = Calendar.current.component(.hour, from: Date()) < 6 || Calendar.current.component(.hour, from: Date()) > 18
+            weatherIconName = getWeatherIcon(for: cachedWeather.condition, isNight: isNight)
+            forecastDescription = generateForecastDescription(cachedWeather)
+            weatherDataLoaded = true
+        }
+        
+        // Show cached routes if available
+        if !RoutePlanner.shared.nearbyTrails.isEmpty {
+            print("📦 Showing \(RoutePlanner.shared.nearbyTrails.count) cached routes")
+            hasLoadedRoutes = true
+            routesForceRefreshID = UUID()
+        }
     }
 
     /// Join a watch workout using the active workout data
@@ -532,9 +616,13 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     public func loadWeatherData() async {
         print("📱 ModernHikeTrackerViewController: Starting weather data loading")
         
-        // Initialize weather state
+        // Initialize weather state - but preserve existing weather data to avoid losing animation
         await MainActor.run {
-            self.weatherDataLoaded = false
+            // Only reset weatherDataLoaded if we don't have any weather data yet
+            // This prevents the animation from disappearing when refreshing weather
+            if !self.weatherDataLoaded || self.weatherCondition == .unknown {
+                self.weatherDataLoaded = false
+            }
             self.forecastDescription = "Checking forecast..."
             
             // Set loading state but don't reset temperature to avoid flicker if we have data
@@ -592,9 +680,17 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
                         self.forecastDescription = "Weather data unavailable"
                     }
                     
-                    // Show weather view with error message
+                    // Preserve existing weather condition if we have one, otherwise set to clear as fallback
+                    // This prevents the animation from disappearing on error
+                    if self.weatherCondition == .unknown {
+                        self.weatherCondition = .clear // Default to clear instead of unknown
+                    }
+                    
+                    // Show weather view with error message (preserve existing data)
                     self.weatherDataLoaded = true
-                    self.weatherIconName = "exclamationmark.triangle"
+                    if self.weatherIconName.isEmpty {
+                        self.weatherIconName = "exclamationmark.triangle"
+                    }
                 }
             }
         } else {
@@ -1073,6 +1169,38 @@ struct HikeTrackerView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showRoutePreview) {
+            if let trail = selectedTrailForPreview {
+                RoutePreviewView(
+                    trail: trail,
+                    onSelectRoute: {
+                        // Handle route selection from preview
+                        DispatchQueue.main.async {
+                            self.showRoutePreview = false
+                        }
+                        
+                        // Create route from trail and select it
+                        let route = Route(
+                            id: UUID(uuidString: trail.id) ?? UUID(),
+                            name: trail.name,
+                            distance: trail.length * 1.60934,
+                            elevation: trail.elevationGain * 0.3048,
+                            difficulty: self.convertDifficulty(trail.difficulty.rawValue)
+                        )
+                        
+                        DispatchQueue.main.async {
+                            self.viewModel.selectRoute(route: route)
+                        }
+                    },
+                    onDismiss: {
+                        // Just close the preview
+                        showRoutePreview = false
+                    }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+        }
     }
     // MARK: - Background View
     private func backgroundView() -> some View {
@@ -1194,6 +1322,69 @@ struct HikeTrackerView: View {
             getRunStyleWeatherGradient()
                 .cornerRadius(22)
                 .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
+                
+            // Normal weather animation
+            ZStack(alignment: .top) {
+                switch viewModel.weatherCondition {
+                case .clear:
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        // Time of day variations based on actual hour
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            ClearMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            ClearEveningView()
+                        } else {
+                            // Regular daytime
+                            ClearDayView()
+                        }
+                    }
+                case .partlyCloudy:
+                    if isNighttime() {
+                        PartlyCloudyNightView()
+                    } else {
+                        // Time of day variations for partly cloudy day
+                        let hour = Calendar.current.component(.hour, from: Date())
+                        if hour >= 5 && hour < 9 {
+                            // Early morning (5-9 AM)
+                            PartlyCloudyMorningView()
+                        } else if hour >= 17 && hour < 20 {
+                            // Evening (5-8 PM)
+                            PartlyCloudyEveningView()
+                        } else {
+                            // Regular daytime
+                            PartlyCloudyDayView()
+                        }
+                    }
+                case .cloudy:
+                    CloudOverlay(nightMode: isNighttime())
+                case .rainy:
+                    ModernRainOverlay(intensity: .medium, nightMode: isNighttime())
+                case .stormy:
+                    LightningView()
+                case .snowy:
+                    SnowfallView(nightMode: isNighttime())
+                case .foggy:
+                    ModernFogOverlay(nightMode: isNighttime())
+                case .windy:
+                    WindyOverlay(nightMode: isNighttime())
+                case .unknown:
+                    // Show a default clear animation instead of empty view to preserve visual continuity
+                    ClearDayView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .opacity(1.0) // Full opacity for better visibility
+            .blendMode(.normal) // Use normal blend mode for better visibility, especially at night
+            // Use stable ID based on condition to preserve animation state across updates
+            // Only changes when condition actually changes, not on every temperature update
+            .id("weather-animation-\(viewModel.weatherCondition.rawValue)")
+            .allowsHitTesting(false) // Allow touches to pass through to content
+            
             VStack(spacing: 12) {
                 hikeWeatherHeader()
                 hikeWeatherContent()
@@ -1202,6 +1393,8 @@ struct HikeTrackerView: View {
                     .padding(.bottom, 10)
             }
             .padding(.vertical, 15)
+            .background(Color.clear) // Transparent background so animation shows through
+            .zIndex(1) // Ensure content is above animation
         }
         .frame(height: 235)
         .cornerRadius(22)
@@ -1211,6 +1404,12 @@ struct HikeTrackerView: View {
         let hour = Calendar.current.component(.hour, from: Date())
         let colors = Color.weatherGradient(for: viewModel.weatherCondition, hour: hour)
         return LinearGradient(gradient: Gradient(colors: [colors.0, colors.1]), startPoint: .top, endPoint: .bottom)
+    }
+    
+    // Helper function to determine if it's night time
+    private func isNighttime() -> Bool {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return hour < 6 || hour > 18
     }
     private func hikeWeatherHeader() -> some View {
         VStack(spacing: 0) {
@@ -2022,6 +2221,14 @@ extension ModernHikeTrackerViewController {
         }
         objectWillChange.send()
     }
+    
+    /// Directly select a route (without toggling)
+    func selectRoute(route: Route) {
+        self.selectedRoute = route
+        print("✅ Selected route: \(route.name ?? "Unnamed")")
+        // Notify observers that the route changed
+        self.objectWillChange.send()
+    }
 
     /// Start a hike using the current selection
     @objc func startHike() {
@@ -2216,6 +2423,12 @@ extension ModernHikeTrackerViewController {
     // MARK: - Settings Observer
     
     private func observePreferencesChanges() {
+        // Initialize tracked preference value
+        if let savedTypeString = UserDefaults.standard.string(forKey: "selectedHikeType"),
+           let savedType = HikeType(rawValue: savedTypeString) {
+            previousHikeType = savedType
+        }
+        
         // Observe when user preferences change
         NotificationCenter.default.addObserver(
             self,
@@ -2225,10 +2438,21 @@ extension ModernHikeTrackerViewController {
         )
     }
     
- 
+
     
     @objc private func userPreferencesDidChange() {
-        print("🔄 User preferences changed notification received")
+        // Check if the actual preference key changed before processing
+        let currentHikeTypeString = UserDefaults.standard.string(forKey: "selectedHikeType")
+        let currentHikeType = currentHikeTypeString.flatMap { HikeType(rawValue: $0) }
+        
+        // Only process if the preference actually changed
+        guard currentHikeType != previousHikeType else {
+            // Not a preference change we care about - ignore
+            return
+        }
+        
+        // Update tracked value
+        previousHikeType = currentHikeType
         
         // Cancel any existing timer
         preferencesDebounceTimer?.invalidate()
@@ -2275,24 +2499,53 @@ extension ModernHikeTrackerViewController {
     public func fetchRoutes(forceRefresh: Bool = false) {
         print("🗺️ Fetching hiking routes...")
         let planner = RoutePlanner.shared
-        if forceRefresh {
-            planner.nearbyTrails = []
+        
+        // Always fetch fresh routes when switching categories or if force refresh is requested
+        // Don't skip if we have routes - they might be from a different category
+        if !forceRefresh && !planner.nearbyTrails.isEmpty {
+            // Check if routes are recent (less than 5 minutes old) and location hasn't changed much
+            // If so, we can use cached routes, otherwise fetch fresh ones
+            if let lastLoadTime = lastRouteLoadTime,
+               Date().timeIntervalSince(lastLoadTime) < 300, // Less than 5 minutes
+               let currentLocation = locationManager.location {
+                // Check if location hasn't changed significantly (within 500m)
+                if let cachedLocation = lastRouteLoadLocation,
+                   currentLocation.distance(from: cachedLocation) < 500 {
+                    print("✓ Using cached routes - \(planner.nearbyTrails.count) routes available (recent & same location)")
+                    hasLoadedRoutes = true
+                    return
+                }
+            }
+            // Routes exist but are stale or location changed - clear and fetch fresh
+            print("🔄 Routes exist but are stale or location changed - fetching fresh routes")
+            planner.clearTrails()
         }
+        
+        if forceRefresh {
+            planner.clearTrails()
+        }
+        
         let performFetch: () -> Void = { [weak self] in
-            planner.fetchNearbyTrails { trails in
+            guard let self = self else { return }
+            planner.findHikingTrails(radius: 10000) { success in
                 DispatchQueue.main.async {
-                    print("🗺️ Fetched \(trails.count) hiking routes")
-                    // Persist to shared planner so all views see the data
-                    planner.nearbyTrails = trails
+                    print("🗺️ Fetched hiking routes - success: \(success)")
                     // Notify UI
-                    self?.hasLoadedRoutes = true
-                    self?.routesForceRefreshID = UUID()
-                    self?.objectWillChange.send()
+                    self.hasLoadedRoutes = true
+                    
+                    // Update cache timestamp and location
+                    self.lastRouteLoadTime = Date()
+                    self.lastRouteLoadLocation = self.locationManager.location
+                    
+                    self.routesForceRefreshID = UUID()
+                    self.objectWillChange.send()
                     NotificationCenter.default.post(name: NSNotification.Name("RoutesUpdated"), object: nil)
                     
                     // If no trails found, log it for debugging
-                    if trails.isEmpty {
+                    if planner.nearbyTrails.isEmpty {
                         print("⚠️ No hiking trails found in the area")
+                    } else {
+                        print("✅ Loaded \(planner.nearbyTrails.count) hiking routes")
                     }
                 }
             }

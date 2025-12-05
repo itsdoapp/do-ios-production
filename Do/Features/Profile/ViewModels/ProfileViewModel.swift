@@ -20,7 +20,8 @@ class ProfileViewModel: ObservableObject {
     @Published var postsCount: Int = 0
     @Published var isFollowing: Bool = false
     @Published var followRequestPending: Bool = false
-    @Published var isCurrentUserProfile: Bool = false
+    // CRITICAL: isCurrentUserProfile is immutable after init to prevent incorrect updates
+    let isCurrentUserProfile: Bool
     @Published var isLoading: Bool = false
     @Published var isLoadingProfile: Bool = false // Separate loading state for profile data
     @Published var isLoadingPosts: Bool = false // Separate loading state for posts
@@ -30,6 +31,9 @@ class ProfileViewModel: ObservableObject {
     // Background loading state tracking
     public var isLoadingInBackground: Bool = false
     private var backgroundLoadingTask: Task<Void, Never>?
+    
+    // Notification observer token for CurrentUserUpdated
+    private var currentUserUpdatedObserver: NSObjectProtocol?
     
     // MARK: - Pagination
     private var postsNextKey: String?
@@ -44,11 +48,16 @@ class ProfileViewModel: ObservableObject {
     private var seenPostIds: Set<String> = [] // Track loaded post IDs to prevent duplicates
     
     // MARK: - Private Properties
-    var user: UserModel
+    @Published var user: UserModel
     private var followers: [UserModel] = []
     private var following: [UserModel] = []
     public var hasBeenLoaded = false
     public var hasFetchedPosts = false
+    
+    // CRITICAL: Store the profile user ID and username that never change
+    // This is the user we're viewing, regardless of any updates
+    private let profileUserId: String
+    private let profileUsername: String?
     
     // MARK: - Smart Caching
     private static var profileCache: [String: CachedProfile] = [:]
@@ -86,7 +95,25 @@ class ProfileViewModel: ObservableObject {
         print("🗑️ Cleared cache for user: \(userId)")
     }
     
-    private struct CachedProfile {
+    // Method to get cached profile (for AuthService)
+    static func getCachedProfile(for userId: String) -> CachedProfile? {
+        return profileCache[userId]
+    }
+    
+    // Method to cache profile (for AuthService)
+    static func cacheProfile(user: UserModel, followerCount: Int, followingCount: Int, isCurrentUser: Bool) {
+        let cacheKey = user.userID ?? user.userName ?? ""
+        profileCache[cacheKey] = CachedProfile(
+            profile: user,
+            followerCount: followerCount,
+            followingCount: followingCount,
+            timestamp: Date(),
+            isCurrentUser: isCurrentUser
+        )
+        print("📦 [ProfileVM] Cached profile for userId: \(cacheKey) (current user: \(isCurrentUser))")
+    }
+    
+    struct CachedProfile {
         let profile: UserModel
         let followerCount: Int
         let followingCount: Int
@@ -121,19 +148,35 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Initialization
     init(user: UserModel) {
+        // CRITICAL: Initialize all stored properties first, in order
         self.user = user
-        // Prefer ID-based check; fallback to username (only if both non-nil)
-        let targetId = user.userID
-        let currentId = AWSCognitoAuth.shared.getCurrentUserId() ?? CurrentUserService.shared.userID
-        let idMatches = (targetId != nil && currentId != nil) ? (targetId == currentId) : false
+        
+        // Store the profile user ID and username IMMEDIATELY - these never change
+        let userId = user.userID ?? user.userName ?? ""
+        let username = user.userName
+        self.profileUserId = userId
+        self.profileUsername = username
+        
+        // CRITICAL: Determine if this is current user's profile based on profileUserId
+        // This is set once and never changes, preventing incorrect updates
+        // Use UserIDResolver to properly handle both Parse and Cognito IDs
+        let idMatches = UserIDResolver.shared.isCurrentUser(userId: userId)
         let usernameMatches: Bool = {
-            if let u = user.userName, let c = CurrentUserService.shared.userName { return u == c }
+            if let u = username, let c = CurrentUserService.shared.userName { return u == c }
             return false
         }()
         self.isCurrentUserProfile = idMatches || usernameMatches
         
+        let (parseUserId, cognitoUserId) = UserIDResolver.shared.getAllUserIds()
+        print("🔒 [ProfileVM] Initializing with profileUserId: \(self.profileUserId), profileUsername: \(self.profileUsername ?? "nil")")
+        print("🔒 [ProfileVM] isCurrentUserProfile set to \(self.isCurrentUserProfile) based on profileUserId: \(self.profileUserId)")
+        print("🔒 [ProfileVM] Input user.userID: \(user.userID ?? "nil"), user.userName: \(user.userName ?? "nil")")
+        print("🔒 [ProfileVM] Current user IDs - Parse: \(parseUserId ?? "nil"), Cognito: \(cognitoUserId ?? "nil"), Username: \(CurrentUserService.shared.userName ?? "nil")")
+        print("🔒 [ProfileVM] isCurrentUserProfile: \(self.isCurrentUserProfile), profileUserId: \(self.profileUserId)")
+        
         // OPTIMISTIC UI: Initialize immediately from user object or CurrentUserService for instant display
-        let cacheKey = user.userID ?? user.userName ?? ""
+        // CRITICAL: Use profileUserId for cache key to ensure consistency
+        let cacheKey = profileUserId
         
         // Try cache first
         if let cached = Self.profileCache[cacheKey], !cached.isExpired {
@@ -143,6 +186,11 @@ class ProfileViewModel: ObservableObject {
             self.profileImage = cached.profile.profilePicture
             self.followerCount = cached.followerCount
             self.followingCount = cached.followingCount
+            // Update user model with cached data including bio
+            self.user.bio = cached.profile.bio
+            self.user.name = cached.profile.name
+            self.user.userName = cached.profile.userName
+            self.user.email = cached.profile.email
             self.hasBeenLoaded = true
             
             // Load posts from cache if available
@@ -158,7 +206,35 @@ class ProfileViewModel: ObservableObject {
             self.name = CurrentUserService.shared.user.name ?? ""
             self.username = CurrentUserService.shared.user.userName ?? ""
             self.profileImage = CurrentUserService.shared.user.profilePicture
+            // Update user model with CurrentUserService data including bio
+            self.user.bio = CurrentUserService.shared.user.bio
+            self.user.name = CurrentUserService.shared.user.name
+            self.user.userName = CurrentUserService.shared.user.userName
+            self.user.email = CurrentUserService.shared.user.email
             // Note: follower/following counts will be updated from API
+            
+            // Listen for CurrentUserUpdated notifications to refresh when user data changes
+            self.currentUserUpdatedObserver = NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("CurrentUserUpdated"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self, self.isCurrentUserProfile else { return }
+                print("🔄 [ProfileVM] Received CurrentUserUpdated notification - updating user model")
+                let updatedUser = CurrentUserService.shared.user
+                
+                // CRITICAL: Update ALL user model properties
+                self.user = updatedUser
+                
+                // Update published properties to trigger UI refresh
+                self.name = updatedUser.name ?? ""
+                self.username = updatedUser.userName ?? ""
+                
+                print("🔄 [ProfileVM] Updated from notification - name: \(self.name), username: \(self.username), bio: \(updatedUser.bio ?? "nil")")
+                
+                // Since user is now @Published, SwiftUI will automatically detect the change
+                // No need to manually trigger objectWillChange
+            }
         } else {
             // For other users, initialize from provided user object
             print("📦 Initializing from user object for instant display")
@@ -181,21 +257,52 @@ class ProfileViewModel: ObservableObject {
     // Update the view model with a new user and reload data
     func updateUser(_ user: UserModel) {
         let oldUser = self.user
-        self.user = user
+        let incomingUserId = user.userID ?? user.userName ?? ""
         
-        // Check if this is the current user's profile using resilient ID comparison
-        self.isCurrentUserProfile = UserIDResolver.shared.isCurrentUser(userId: user.userID)
-        
-        // Also check username match as fallback
+        // CRITICAL: If viewing another user's profile, NEVER update with different user's data
         if !isCurrentUserProfile {
-            let usernameMatches: Bool = {
-                if let u = user.userName, let c = CurrentUserService.shared.userName { return u == c }
-                return false
-            }()
-            self.isCurrentUserProfile = usernameMatches
+            // We're viewing another user's profile - only update if it's the same user
+            if incomingUserId != profileUserId {
+                print("🚫 [ProfileVM] BLOCKED updateUser - trying to update other user's profile with different user data")
+                print("   - profileUserId: \(profileUserId)")
+                print("   - incomingUserId: \(incomingUserId)")
+                print("   - This would show wrong user's data - BLOCKED")
+                return
+            }
+            // Same user, safe to update
+            print("✅ [ProfileVM] Updating other user's profile with same user data: \(profileUserId)")
         }
         
-        print("👤 [ProfileVM] updateUser - isCurrentUserProfile: \(isCurrentUserProfile), targetId: \(user.userID ?? "nil")")
+        // For current user profile, check if this is still the current user
+        if isCurrentUserProfile {
+            let isStillCurrentUser = UserIDResolver.shared.isCurrentUser(userId: user.userID) || 
+                                    (user.userName == CurrentUserService.shared.userName)
+            if !isStillCurrentUser {
+                print("⚠️ [ProfileVM] Current user profile being updated with different user - this shouldn't happen")
+                // Don't update if it's a different user
+                return
+            }
+        }
+        
+        // CRITICAL: Always update the user model and published properties
+        // This ensures bio, name, and username are visible immediately
+        self.user = user
+        
+        // CRITICAL: Always update published properties immediately
+        // This ensures name, username, and bio are visible when coming back from settings
+        let newName = user.name ?? ""
+        let newUsername = user.userName ?? ""
+        
+        // Always update - don't check if changed, just update to ensure consistency
+        self.name = newName
+        self.username = newUsername
+        
+        print("🔄 [ProfileVM] updateUser - Updated properties:")
+        print("   - name: '\(newName)' (was: '\(oldUser.name ?? "nil")')")
+        print("   - username: '\(newUsername)' (was: '\(oldUser.userName ?? "nil")')")
+        print("   - bio: '\(user.bio ?? "nil")' (was: '\(oldUser.bio ?? "nil")')")
+        
+        print("👤 [ProfileVM] updateUser - isCurrentUserProfile: \(isCurrentUserProfile), targetId: \(user.userID ?? "nil"), bio: \(user.bio ?? "nil"), name: \(user.name ?? "nil"), username: \(user.userName ?? "nil")")
         
         // Only reload if switching to a different user or if data isn't loaded
         let oldKey = oldUser.userID ?? oldUser.userName ?? ""
@@ -212,6 +319,13 @@ class ProfileViewModel: ObservableObject {
         } else if !hasBeenLoaded && !isLoadingInBackground {
             // Same user but not loaded yet and not already loading
             loadUserDataWithCache()
+        } else {
+            // Same user and already loaded - just update the user model to reflect latest changes
+            // This is important when coming back from settings
+            print("🔄 [ProfileVM] Same user, updating model with latest data (bio: \(user.bio ?? "nil"), name: \(user.name ?? "nil"))")
+            
+            // Since user is now @Published, SwiftUI will automatically detect the change
+            // No need to manually trigger objectWillChange
         }
         // If same user and already loaded or loading in background, keep existing data
     }
@@ -229,7 +343,8 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Public Methods
     private func loadUserDataWithCache() {
-        let cacheKey = user.userID ?? user.userName ?? ""
+        // CRITICAL: Use profileUserId for cache key to ensure consistency
+        let cacheKey = profileUserId
         
         // Check cache first (but don't mark as fully loaded if expired - refresh in background)
         if let cached = Self.profileCache[cacheKey], !cached.isExpired {
@@ -240,8 +355,16 @@ class ProfileViewModel: ObservableObject {
             // Load posts from cache or fetch
             loadPostsWithCache()
             
-            // Refresh in background if cache is getting old (but not expired)
-            if Date().timeIntervalSince(cached.timestamp) > 1800 { // 30 minutes
+            // For current user: always refresh in background to ensure we have latest data
+            // This ensures current user profile is always up-to-date
+            if isCurrentUserProfile {
+                print("🔄 Current user profile cached, refreshing in background to get latest data...")
+                // Refresh in background without blocking UI
+                Task {
+                    await loadUserData()
+                }
+            } else if Date().timeIntervalSince(cached.timestamp) > 1800 { // 30 minutes
+                // For other users: refresh if cache is getting old (but not expired)
                 Task {
                     await loadUserData()
                 }
@@ -249,13 +372,16 @@ class ProfileViewModel: ObservableObject {
             return
         }
         
+        // Cache miss or expired - always load fresh data
+        print("🔄 No valid cache found, loading fresh data...")
+        
         // Cache miss or expired, load fresh data
         // But UI already shows optimistic data from init, so this won't block
         loadUserData()
     }
     
     func loadUserData() {
-        print("🔄 Starting loadUserData for user: \(user.userName ?? "unknown")")
+        print("🔄 Starting loadUserData for user: \(user.userName ?? "unknown"), isCurrentUser: \(isCurrentUserProfile), hasBeenLoaded: \(hasBeenLoaded)")
         
         // Check if already loading in background
         if isLoadingInBackground {
@@ -263,66 +389,73 @@ class ProfileViewModel: ObservableObject {
             return
         }
         
-        // For current user profile, allow reload but not too frequently
+        // For other users: skip if already loaded (don't reload unnecessarily)
         if !isCurrentUserProfile && hasBeenLoaded {
             print("⚠️ Data already loaded for other user, skipping...")
             return
         }
         
-        // For current user, only refresh if we've posted something (explicit signal)
-        if isCurrentUserProfile && hasBeenLoaded {
-            let cacheKey = user.userID ?? user.userName ?? ""
-            if let _ = Self.profileCache[cacheKey] {
-                // Check if we need to refresh due to new posts the user made
-                let shouldRefreshForNewContent = CurrentUserService.shared.shouldRefreshCurrentUserProfile
-                if !shouldRefreshForNewContent {
-                    print("⏭️ Current user profile is up-to-date; no new content posted. Skipping refresh…")
-                    return
-                } else {
-                    print("🔄 Refreshing current user profile due to newly posted content…")
-                    // Reset the flag once we proceed to refresh
-                    CurrentUserService.shared.shouldRefreshCurrentUserProfile = false
-                }
-            }
-        }
+        // For current user: always allow initial load, even if cached
+        // If already loaded from cache, refresh in background without blocking UI
+        let shouldLoadInBackground = isCurrentUserProfile && hasBeenLoaded
         
-        isLoading = true
-        isLoadingProfile = true
-        isLoadingInBackground = true
+        if shouldLoadInBackground {
+            print("🔄 Current user profile cached, refreshing in background...")
+            isLoadingInBackground = true
+            // Don't set isLoading/isLoadingProfile to avoid showing loading overlay
+        } else {
+            // Initial load - show loading state
+            isLoading = true
+            isLoadingProfile = true
+            isLoadingInBackground = true
+        }
 
         // If viewing another user's profile, fetch from AWS
         if !isCurrentUserProfile {
             print("➡️ Viewing another user's profile; fetching from AWS")
+            print("🔒 [ProfileVM] Using profileUserId: \(profileUserId) for data fetch")
             
-            guard let targetUserId = user.userID else {
-                print("❌ No user ID found for profile")
+            guard !profileUserId.isEmpty else {
+                print("❌ No profileUserId found for profile")
                 isLoading = false
                 isLoadingProfile = false
                 isLoadingInBackground = false
                 return
             }
             
+            // Use the stored profileUserId, not user.userID which might be updated
             let currentUserId = AWSCognitoAuth.shared.getCurrentUserId() ?? CurrentUserService.shared.userID
             
+            // Check follow status immediately if we have it from the user model
+            if let isFollowingFromModel = user.isFollowing {
+                self.isFollowing = isFollowingFromModel
+                print("📋 Using follow status from user model: \(isFollowingFromModel)")
+            }
+            
             Task { @MainActor in
-                // Fetch profile and posts in PARALLEL using async let
-                print("🌐 Fetching profile and posts in parallel for user: \(targetUserId)")
+                // Fetch profile and check follow status in PARALLEL
+                print("🌐 Fetching profile and checking follow status for profileUserId: \(profileUserId)")
                 
                 // Start both tasks in parallel
+                // CRITICAL: Use profileUserId, not user.userID
                 async let profileTask: UserProfileResponse = ProfileAPIService.shared.fetchUserProfile(
-                    userId: targetUserId,
+                    userId: profileUserId,
                     currentUserId: currentUserId,
                     includeFollowers: false,
                     includeFollowing: false
                 )
                 
+                // Also check follow status explicitly to ensure it's up to date
+                async let followStatusTask = checkFollowStatus()
+                
                 let postsTask = Task { [weak self] in
                     await self?.loadUserPosts()
                 }
                 
-                // Handle profile fetch
+                // Handle profile fetch and follow status check
                 do {
                     let profileResponse = try await profileTask
+                    await followStatusTask // Wait for follow status check to complete
                     
                     guard let profileData = profileResponse.data else {
                         print("❌ No profile data returned from AWS")
@@ -364,14 +497,20 @@ class ProfileViewModel: ObservableObject {
                         }
                     }
                     
-                    // Update follow status
+                    // Update follow status from profile response (may be more up-to-date)
                     if let followStatus = profileData.followStatus {
                         self.isFollowing = followStatus.isFollowing && (followStatus.accepted ?? true)
                         self.followRequestPending = followStatus.pending ?? false
+                        print("📊 Follow status from profile: following=\(self.isFollowing), pending=\(self.followRequestPending)")
                     }
                     
+                    // Log privacy status
+                    let isPrivate = apiUser.privacyToggle ?? false
+                    print("🔒 Profile privacy: \(isPrivate ? "PRIVATE" : "PUBLIC"), canSharePosts: \(self.canSharePosts)")
+                    
                     // Cache the profile data
-                    let cacheKey = targetUserId
+                    // CRITICAL: Use profileUserId for cache key to ensure consistency
+                    let cacheKey = profileUserId
                     Self.profileCache[cacheKey] = CachedProfile(
                         profile: self.user,
                         followerCount: self.followerCount,
@@ -504,8 +643,8 @@ class ProfileViewModel: ObservableObject {
                 }
                 
                 // Cache the profile data
-                // Use the user ID that successfully fetched the profile
-                let cacheKey = successfulUserId ?? UserIDResolver.shared.getBestUserIdForAPI() ?? userIdsToTry.first ?? "unknown"
+                // CRITICAL: Use profileUserId for cache key to ensure consistency
+                let cacheKey = profileUserId
                 Self.profileCache[cacheKey] = CachedProfile(
                     profile: self.user,
                     followerCount: self.followerCount,
@@ -552,7 +691,8 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Post Loading
     private func loadPostsWithCache() {
-        let cacheKey = user.userID ?? user.userName ?? ""
+        // CRITICAL: Use profileUserId for cache key to ensure consistency
+        let cacheKey = profileUserId
         
         // Check posts cache
         if let cached = Self.postsCache[cacheKey], !cached.isExpired {
@@ -571,7 +711,11 @@ class ProfileViewModel: ObservableObject {
     }
     
     func loadUserPosts() async {
-        print("📫 Starting loadUserPosts from AWS for user: \(user.userName ?? "unknown")")
+        // CRITICAL: Use the stored profileUserId that never changes, not user.userID which might be updated
+        print("📫 [ProfileVM] Starting loadUserPosts from AWS")
+        print("📫 [ProfileVM] profileUserId: \(profileUserId), profileUsername: \(profileUsername ?? "unknown")")
+        print("📫 [ProfileVM] isCurrentUserProfile: \(isCurrentUserProfile)")
+        print("📫 [ProfileVM] self.user.userID: \(self.user.userID ?? "nil") (may be different from profileUserId)")
         
         // Respect privacy: if profile is private and not own profile and not following, don't fetch posts
         if (user.privacyToggle ?? false) && !isCurrentUserProfile && !isFollowing {
@@ -592,8 +736,15 @@ class ProfileViewModel: ObservableObject {
             self.isLoadingInBackground = true
         }
         
+        // CRITICAL: Create a minimal UserModel from profileUserId/profileUsername for ID resolution
+        // This ensures we always use the correct user IDs, even if self.user has been updated
+        var profileUserModel = UserModel()
+        profileUserModel.userID = profileUserId
+        profileUserModel.userName = profileUsername
+        
         // Get user IDs to try (resilient to both Parse and Cognito IDs)
-        let userIdsToTry = UserIDResolver.shared.getUserIdsForDataFetch(userModel: user)
+        let userIdsToTry = UserIDResolver.shared.getUserIdsForDataFetch(userModel: profileUserModel)
+        print("📫 [ProfileVM] User IDs to try for posts: \(userIdsToTry), profileUserId: \(profileUserId), isCurrentUser: \(isCurrentUserProfile)")
         
         guard !userIdsToTry.isEmpty else {
             print("❌ Profile user ID not available")
@@ -623,10 +774,12 @@ class ProfileViewModel: ObservableObject {
                 let result: (posts: [Post], nextKey: String?)
                 
                 if isCurrentUserProfile {
-                    print("👤 [ProfileVM] Trying to fetch my posts with user ID: \(userId) (Parse ID: \(UserIDResolver.shared.isParseUserId(userId)))")
+                    print("👤 [ProfileVM] Fetching MY posts (isCurrentUserProfile=true)")
+                    print("👤 [ProfileVM] Using user ID: \(userId) (Parse ID: \(UserIDResolver.shared.isParseUserId(userId)))")
                     result = try await FeedAPIService.shared.fetchMyPosts(currentUserId: userId, limit: 100)
                 } else {
-                    print("👤 [ProfileVM] Trying to fetch posts for user ID: \(userId) (Parse ID: \(UserIDResolver.shared.isParseUserId(userId)))")
+                    print("👤 [ProfileVM] Fetching OTHER USER's posts (isCurrentUserProfile=false)")
+                    print("👤 [ProfileVM] profileUserId: \(profileUserId), using user ID: \(userId) (Parse ID: \(UserIDResolver.shared.isParseUserId(userId)))")
                     result = try await FeedAPIService.shared.fetchUserPosts(userId: userId, limit: 100)
                 }
                 
@@ -635,7 +788,17 @@ class ProfileViewModel: ObservableObject {
                     fetchedPosts = result.posts
                     nextKey = result.nextKey
                     successfulUserId = userId // Track the successful user ID
-                    print("✅ [ProfileVM] Successfully fetched \(fetchedPosts.count) posts using user ID: \(userId)")
+                    print("✅ [ProfileVM] Successfully fetched \(fetchedPosts.count) posts")
+                    print("   - Using user ID: \(userId)")
+                    print("   - profileUserId: \(profileUserId)")
+                    print("   - isCurrentUserProfile: \(isCurrentUserProfile)")
+                    // Verify the posts belong to the correct user
+                    if let firstPost = fetchedPosts.first {
+                        print("   - First post userId: \(firstPost.userId ?? "nil")")
+                        if firstPost.userId != profileUserId && !isCurrentUserProfile {
+                            print("⚠️ [ProfileVM] WARNING: Post userId (\(firstPost.userId ?? "nil")) doesn't match profileUserId (\(profileUserId))!")
+                        }
+                    }
                     break
                 } else {
                     // Even if no posts, if the API call succeeded, use this user ID
@@ -763,7 +926,8 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingInBackground = false
                 
                 // Cache the posts data with smart expiration
-                let cacheKey = self.user.userID ?? self.user.userName ?? ""
+                // CRITICAL: Use profileUserId for cache key to ensure consistency
+                let cacheKey = profileUserId
                 Self.postsCache[cacheKey] = CachedPosts(
                     posts: processedPosts,
                     thoughts: processedThoughts,
@@ -771,8 +935,8 @@ class ProfileViewModel: ObservableObject {
                     isCurrentUser: self.isCurrentUserProfile
                 )
                 
-                // Also cache under current user ID if this is current user
-                if self.isCurrentUserProfile, let currentId = AWSCognitoAuth.shared.getCurrentUserId() {
+                // Also cache under current user ID if this is current user (for backward compatibility)
+                if self.isCurrentUserProfile, let currentId = AWSCognitoAuth.shared.getCurrentUserId(), currentId != profileUserId {
                     Self.postsCache[currentId] = Self.postsCache[cacheKey]
                 }
                 print("📦 Posts cached for future use")
@@ -963,10 +1127,12 @@ class ProfileViewModel: ObservableObject {
             return
         }
         
-        guard let userId = user.userID else {
-            print("❌ [ProfileVM] No user ID for pagination")
+        // CRITICAL: Use profileUserId, not user.userID
+        guard !profileUserId.isEmpty else {
+            print("❌ [ProfileVM] No profileUserId for pagination")
             return
         }
+        let userId = profileUserId
         
         guard let nextKey = initialState.nextKey else {
             print("❌ [ProfileVM] No nextKey for pagination (postsNextKey is nil)")
@@ -1005,6 +1171,7 @@ class ProfileViewModel: ObservableObject {
         print("✅ [ProfileVM] Starting loadMorePosts with nextKey: \(nextKey.prefix(20))...")
         print("🔍 [ProfileVM] Current posts count: \(await MainActor.run { self.posts.count }), thoughts: \(await MainActor.run { self.thoughts.count })")
         print("🔍 [ProfileVM] Seen post IDs count: \(await MainActor.run { self.seenPostIds.count })")
+        print("🔍 [ProfileVM] Using profileUserId: \(profileUserId), isCurrentUserProfile: \(isCurrentUserProfile)")
         
         await MainActor.run {
             self.isLoadingMorePosts = true
@@ -1014,6 +1181,7 @@ class ProfileViewModel: ObservableObject {
             let result: (posts: [Post], nextKey: String?)
             
             print("🔍 [ProfileVM] Calling API with lastKey: \(nextKey.prefix(50))...")
+            print("🔍 [ProfileVM] Fetching posts for profileUserId: \(profileUserId), isCurrentUser: \(isCurrentUserProfile)")
             
             if isCurrentUserProfile {
                 result = try await FeedAPIService.shared.fetchMyPosts(currentUserId: userId, limit: 100, lastKey: nextKey)
@@ -1094,7 +1262,8 @@ class ProfileViewModel: ObservableObject {
                 }
                 
                 // Update cache with all loaded posts (accumulative)
-                let cacheKey = self.user.userID ?? self.user.userName ?? ""
+                // CRITICAL: Use profileUserId for cache key to ensure consistency
+                let cacheKey = profileUserId
                 Self.postsCache[cacheKey] = CachedPosts(
                     posts: self.posts,
                     thoughts: self.thoughts,
@@ -1102,8 +1271,8 @@ class ProfileViewModel: ObservableObject {
                     isCurrentUser: self.isCurrentUserProfile
                 )
                 
-                // Also cache under current user ID if this is current user
-                if self.isCurrentUserProfile, let currentId = AWSCognitoAuth.shared.getCurrentUserId() {
+                // Also cache under current user ID if this is current user (for backward compatibility)
+                if self.isCurrentUserProfile, let currentId = AWSCognitoAuth.shared.getCurrentUserId(), currentId != profileUserId {
                     Self.postsCache[currentId] = Self.postsCache[cacheKey]
                 }
             }
@@ -1293,16 +1462,17 @@ class ProfileViewModel: ObservableObject {
             return
         }
         
-        guard let targetUserId = user.userID else {
-            print("❌ No target user ID found for follow check")
+        // CRITICAL: Use profileUserId, not user.userID
+        guard !profileUserId.isEmpty else {
+            print("❌ No profileUserId found for follow check")
             return
         }
         
-        print("👥 Checking if user \(currentUserId) follows \(targetUserId) via AWS")
+        print("👥 Checking if user \(currentUserId) follows \(profileUserId) via AWS")
         do {
             let followStatus = try await ProfileAPIService.shared.checkFollowStatus(
                 userId: currentUserId,
-                targetUserId: targetUserId
+                targetUserId: profileUserId
             )
             
             await MainActor.run {
@@ -1327,12 +1497,13 @@ class ProfileViewModel: ObservableObject {
     
     func fetchFollowCounts() async {
         print("📊 Starting to fetch follow counts")
-        guard let userId = user.userID else {
-            print("❌ No user ID found for fetching follow counts")
+        // CRITICAL: Use profileUserId, not user.userID
+        guard !profileUserId.isEmpty else {
+            print("❌ No profileUserId found for fetching follow counts")
             return
         }
         
-        print("👤 Fetching counts for user: \(userId)")
+        print("👤 Fetching counts for profileUserId: \(profileUserId)")
         
         do {
             // Use ProfileAPIService to get follow counts
@@ -1342,7 +1513,7 @@ class ProfileViewModel: ObservableObject {
             }
             
             let profileResponse = try await ProfileAPIService.shared.fetchUserProfile(
-                userId: userId,
+                userId: profileUserId,
                 currentUserId: currentUserId,
                 includeFollowers: false,
                 includeFollowing: false
@@ -1372,10 +1543,12 @@ class ProfileViewModel: ObservableObject {
             return
         }
         
-        guard let targetUserId = user.userID else {
-            print("❌ No target user ID found for follow toggle")
+        // CRITICAL: Use profileUserId, not user.userID
+        guard !profileUserId.isEmpty else {
+            print("❌ No profileUserId found for follow toggle")
             return
         }
+        let targetUserId = profileUserId
         
         // Provide haptic feedback
         let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -1436,137 +1609,81 @@ class ProfileViewModel: ObservableObject {
     }
     
     func showFollowersList() {
-        Task {
-            do {
-                await MainActor.run { isLoading = true }
-                
-                guard let userId = user.userID,
-                      let currentUserId = AWSCognitoAuth.shared.getCurrentUserId() ?? CurrentUserService.shared.userID else {
-                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No user ID found"])
-                }
-                
-                // Fetch followers using paginated endpoint
-                let response = try await ProfileAPIService.shared.fetchFollowers(
-                    userId: userId,
-                    currentUserId: currentUserId,
-                    limit: 100
-                )
-                
-                // Convert APIUser to UserModel (FAST - no image loading)
-                let followers: [UserModel] = response.data.map { userWithStatus in
-                    var user = userWithStatus.toUserModel()
-                    // Follow status is already set in toUserModel
-                    return user
-                }
-                
-                await MainActor.run {
-                    self.followers = followers
-                    self.isLoading = false
-                    
-                    let vc = ModernUserListViewController()
-                    vc.users = followers
-                    vc.currentUser = self.user
-                    vc.listType = .followers
-                    vc.modalPresentationStyle = .overFullScreen
-                    
-                    let transition = CATransition()
-                    transition.duration = 0.3
-                    transition.type = .push
-                    transition.subtype = .fromRight
-                    
-                    // Present safely from the current top-most controller
-                    self.presentFromTop(vc, transition: transition)
-                }
-            } catch {
-                print("❌ Error loading followers from AWS: \(error.localizedDescription)")
-                print("❌ Full error: \(error)")
-                if let decodingError = error as? DecodingError {
-                    switch decodingError {
-                    case .keyNotFound(let key, let context):
-                        print("❌ Key '\(key.stringValue)' not found: \(context.debugDescription)")
-                    case .typeMismatch(let type, let context):
-                        print("❌ Type mismatch for type \(type): \(context.debugDescription)")
-                    case .valueNotFound(let type, let context):
-                        print("❌ Value not found for type \(type): \(context.debugDescription)")
-                    case .dataCorrupted(let context):
-                        print("❌ Data corrupted: \(context.debugDescription)")
-                    @unknown default:
-                        print("❌ Unknown decoding error")
-                    }
-                }
-                await MainActor.run {
-                    self.isLoading = false
-                    self.showErrorBanner(message: "Failed to load followers")
-                }
-            }
+        // Privacy check: if viewing another user's private profile and not following, don't show followers
+        if !isCurrentUserProfile && (user.privacyToggle ?? false) && !isFollowing {
+            print("🔒 Cannot view followers: profile is private and not following")
+            showErrorBanner(message: "This user's followers are private")
+            return
         }
+        
+        // CRITICAL: Create a fresh UserModel with profileUserId/profileUsername to ensure correct data
+        // Don't use self.user as it might have been overwritten with current user data
+        var profileUser = UserModel()
+        profileUser.userID = profileUserId
+        profileUser.userName = profileUsername
+        // Copy other relevant fields from self.user for display purposes
+        profileUser.name = self.user.name
+        profileUser.email = self.user.email
+        profileUser.profilePictureUrl = self.user.profilePictureUrl
+        profileUser.privacyToggle = self.user.privacyToggle
+        profileUser.bio = self.user.bio
+        
+        // ModernUserListViewController now handles its own loading with intelligent pagination
+        // Just present the view controller - it will load data efficiently
+        let vc = ModernUserListViewController()
+        vc.users = [] // Start empty - will load on viewDidLoad
+        vc.currentUser = profileUser // Use the profile's user with correct ID
+        vc.listType = .followers
+        vc.modalPresentationStyle = .overFullScreen
+        
+        print("👥 [ProfileVM] Showing followers list for profileUserId: \(profileUserId), userName: \(profileUsername ?? "nil")")
+        
+        let transition = CATransition()
+        transition.duration = 0.3
+        transition.type = .push
+        transition.subtype = .fromRight
+        
+        // Present safely from the current top-most controller
+        self.presentFromTop(vc, transition: transition)
     }
     
     func showFollowingList() {
-        Task {
-            do {
-                await MainActor.run { isLoading = true }
-                
-                guard let userId = user.userID,
-                      let currentUserId = AWSCognitoAuth.shared.getCurrentUserId() ?? CurrentUserService.shared.userID else {
-                    throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "No user ID found"])
-                }
-                
-                // Fetch following using paginated endpoint
-                let response = try await ProfileAPIService.shared.fetchFollowing(
-                    userId: userId,
-                    currentUserId: currentUserId,
-                    limit: 100
-                )
-                
-                // Convert APIUser to UserModel (FAST - no image loading)
-                let following: [UserModel] = response.data.map { userWithStatus in
-                    var user = userWithStatus.toUserModel()
-                    // Follow status is already set in toUserModel
-                    return user
-                }
-                
-                await MainActor.run {
-                    self.following = following
-                    self.isLoading = false
-                    
-                    let vc = ModernUserListViewController()
-                    vc.users = following
-                    vc.currentUser = self.user
-                    vc.listType = .following
-                    vc.modalPresentationStyle = .overFullScreen
-                    
-                    let transition = CATransition()
-                    transition.duration = 0.3
-                    transition.type = .push
-                    transition.subtype = .fromRight
-                    
-                    // Present safely from the current top-most controller
-                    self.presentFromTop(vc, transition: transition)
-                }
-            } catch {
-                print("❌ Error loading following from AWS: \(error.localizedDescription)")
-                print("❌ Full error: \(error)")
-                if let decodingError = error as? DecodingError {
-                    switch decodingError {
-                    case .keyNotFound(let key, let context):
-                        print("❌ Key '\(key.stringValue)' not found: \(context.debugDescription)")
-                    case .typeMismatch(let type, let context):
-                        print("❌ Type mismatch for type \(type): \(context.debugDescription)")
-                    case .valueNotFound(let type, let context):
-                        print("❌ Value not found for type \(type): \(context.debugDescription)")
-                    case .dataCorrupted(let context):
-                        print("❌ Data corrupted: \(context.debugDescription)")
-                    @unknown default:
-                        print("❌ Unknown decoding error")
-                    }
-                }
-                await MainActor.run {
-                    self.isLoading = false
-                    self.showErrorBanner(message: "Failed to load following")
-                }
-            }
+        // Privacy check: if viewing another user's private profile and not following, don't show following
+        if !isCurrentUserProfile && (user.privacyToggle ?? false) && !isFollowing {
+            print("🔒 Cannot view following: profile is private and not following")
+            showErrorBanner(message: "This user's following list is private")
+            return
         }
+        
+        // CRITICAL: Create a fresh UserModel with profileUserId/profileUsername to ensure correct data
+        // Don't use self.user as it might have been overwritten with current user data
+        var profileUser = UserModel()
+        profileUser.userID = profileUserId
+        profileUser.userName = profileUsername
+        // Copy other relevant fields from self.user for display purposes
+        profileUser.name = self.user.name
+        profileUser.email = self.user.email
+        profileUser.profilePictureUrl = self.user.profilePictureUrl
+        profileUser.privacyToggle = self.user.privacyToggle
+        profileUser.bio = self.user.bio
+        
+        // ModernUserListViewController now handles its own loading with intelligent pagination
+        // Just present the view controller - it will load data efficiently
+        let vc = ModernUserListViewController()
+        vc.users = [] // Start empty - will load on viewDidLoad
+        vc.currentUser = profileUser // Use the profile's user with correct ID
+        vc.listType = .following
+        vc.modalPresentationStyle = .overFullScreen
+        
+        print("👥 [ProfileVM] Showing following list for profileUserId: \(profileUserId), userName: \(profileUsername ?? "nil")")
+        
+        let transition = CATransition()
+        transition.duration = 0.3
+        transition.type = .push
+        transition.subtype = .fromRight
+        
+        // Present safely from the current top-most controller
+        self.presentFromTop(vc, transition: transition)
     }
     
     func editProfile() {
@@ -1706,8 +1823,182 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
+    /// Delete a post from the user's profile
+    func deletePost(postId: String) async {
+        guard let userId = UserIDHelper.shared.getCurrentUserID() else {
+            print("⚠️ [ProfileVM] Cannot delete post - no user ID")
+            showErrorBanner(message: "Failed to delete post")
+            return
+        }
+        
+        print("🗑️ [ProfileVM] Deleting post: \(postId)")
+        
+        do {
+            // Delete from backend
+            let success = try await FeedAPIService.shared.deletePost(postId: postId, userId: userId)
+            
+            if success {
+                // Remove from local arrays
+                await MainActor.run {
+                    self.posts.removeAll { $0.objectId == postId }
+                    self.thoughts.removeAll { $0.objectId == postId }
+                    self.postsCount = self.posts.count + self.thoughts.count
+                    
+                    // Clear cache to force refresh
+                    // CRITICAL: Use profileUserId for cache key to ensure consistency
+                    let cacheKey = profileUserId
+                    Self.clearCacheForUser(cacheKey)
+                    
+                    print("✅ [ProfileVM] Post deleted successfully")
+                    let banner = NotificationBanner(title: "Post deleted", style: .success)
+                    banner.show(bannerPosition: .top)
+                }
+            } else {
+                throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Delete failed"])
+            }
+        } catch {
+            print("❌ [ProfileVM] Error deleting post: \(error)")
+            await MainActor.run {
+                showErrorBanner(message: "Failed to delete post")
+            }
+        }
+    }
+    
+    /// Hide a post from the profile (removes it from view but doesn't delete)
+    func hidePost(postId: String) async {
+        guard let userId = UserIDHelper.shared.getCurrentUserID() else {
+            print("⚠️ [ProfileVM] Cannot hide post - no user ID")
+            showErrorBanner(message: "Failed to hide post")
+            return
+        }
+        
+        print("👁️ [ProfileVM] Hiding post: \(postId)")
+        
+        // Remove from local arrays immediately (optimistic update)
+        await MainActor.run {
+            self.posts.removeAll { $0.objectId == postId }
+            self.thoughts.removeAll { $0.objectId == postId }
+            self.postsCount = self.posts.count + self.thoughts.count
+            
+            // Clear cache to force refresh
+            // CRITICAL: Use profileUserId for cache key to ensure consistency
+            let cacheKey = profileUserId
+            Self.clearCacheForUser(cacheKey)
+        }
+        
+        do {
+            // Call API to hide post on backend
+            let success = try await FeedAPIService.shared.hidePost(postId: postId, userId: userId)
+            if success {
+                await MainActor.run {
+                    let banner = NotificationBanner(title: "Post hidden", style: .success)
+                    banner.show(bannerPosition: .top)
+                }
+                print("✅ [ProfileVM] Post hidden successfully")
+            } else {
+                throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Hide failed"])
+            }
+        } catch {
+            print("❌ [ProfileVM] Error hiding post: \(error)")
+            await MainActor.run {
+                showErrorBanner(message: "Failed to hide post")
+            }
+        }
+    }
+    
+    /// Archive a post (removes it from profile but keeps it in user's archive)
+    func archivePost(postId: String) async {
+        guard let userId = UserIDHelper.shared.getCurrentUserID() else {
+            print("⚠️ [ProfileVM] Cannot archive post - no user ID")
+            showErrorBanner(message: "Failed to archive post")
+            return
+        }
+        
+        print("📦 [ProfileVM] Archiving post: \(postId)")
+        
+        // Remove from local arrays immediately (optimistic update)
+        await MainActor.run {
+            self.posts.removeAll { $0.objectId == postId }
+            self.thoughts.removeAll { $0.objectId == postId }
+            self.postsCount = self.posts.count + self.thoughts.count
+            
+            // Clear cache to force refresh
+            // CRITICAL: Use profileUserId for cache key to ensure consistency
+            let cacheKey = profileUserId
+            Self.clearCacheForUser(cacheKey)
+        }
+        
+        do {
+            // Call API to archive post on backend
+            let success = try await FeedAPIService.shared.archivePost(postId: postId, userId: userId)
+            if success {
+                await MainActor.run {
+                    let banner = NotificationBanner(title: "Post archived", style: .success)
+                    banner.show(bannerPosition: .top)
+                }
+                print("✅ [ProfileVM] Post archived successfully")
+            } else {
+                throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Archive failed"])
+            }
+        } catch {
+            print("❌ [ProfileVM] Error archiving post: \(error)")
+            await MainActor.run {
+                showErrorBanner(message: "Failed to archive post")
+            }
+        }
+    }
+    
+    /// Report a post for inappropriate content
+    func reportPost(postId: String, reason: String? = nil) async {
+        guard let userId = UserIDHelper.shared.getCurrentUserID() else {
+            print("⚠️ [ProfileVM] Cannot report post - no user ID")
+            showErrorBanner(message: "Failed to report post")
+            return
+        }
+        
+        print("🚨 [ProfileVM] Reporting post: \(postId), reason: \(reason ?? "No reason provided")")
+        
+        // Remove from local arrays immediately (optimistic update)
+        await MainActor.run {
+            self.posts.removeAll { $0.objectId == postId }
+            self.thoughts.removeAll { $0.objectId == postId }
+            self.postsCount = self.posts.count + self.thoughts.count
+            
+            // Clear cache to force refresh
+            // CRITICAL: Use profileUserId for cache key to ensure consistency
+            let cacheKey = profileUserId
+            Self.clearCacheForUser(cacheKey)
+        }
+        
+        do {
+            // Call API to report post on backend
+            let success = try await FeedAPIService.shared.reportPost(postId: postId, userId: userId, reason: reason)
+            if success {
+                await MainActor.run {
+                    let banner = NotificationBanner(title: "Post reported", style: .success)
+                    banner.show(bannerPosition: .top)
+                }
+                print("✅ [ProfileVM] Post reported successfully")
+            } else {
+                throw NSError(domain: "ProfileError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Report failed"])
+            }
+        } catch {
+            print("❌ [ProfileVM] Error reporting post: \(error)")
+            await MainActor.run {
+                showErrorBanner(message: "Failed to report post")
+            }
+        }
+    }
+    
     private func showErrorBanner(message: String) {
             let banner = NotificationBanner(title: message, style: .danger)
             banner.show(bannerPosition: .top)
         }
+    
+    deinit {
+        // Remove notification observer when view model is deallocated
+        if let observer = currentUserUpdatedObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
+}

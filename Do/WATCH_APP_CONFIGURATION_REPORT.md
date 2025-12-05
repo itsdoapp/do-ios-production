@@ -213,3 +213,7 @@ All required settings are properly configured:
 **Project:** Do iOS App
 **Watch App:** Do Watch App
 
+
+
+
+

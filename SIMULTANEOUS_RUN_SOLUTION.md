@@ -137,3 +137,7 @@ To verify this is working:
 ✅ **Distribution**: Watch app still embedded in archives
 ✅ **No more killing**: Running one won't terminate the other
 
+
+
+
+

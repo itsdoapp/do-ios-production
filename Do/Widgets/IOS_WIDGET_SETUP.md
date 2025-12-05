@@ -123,3 +123,7 @@ The widget needs HealthKit read permissions. These should be requested by the ma
 - Widget updates automatically via timeline policy
 - Manual refresh: `WidgetCenter.shared.reloadTimelines(ofKind: "DailyBricksWidget")`
 
+
+
+
+

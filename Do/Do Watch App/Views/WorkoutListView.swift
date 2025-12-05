@@ -2,7 +2,7 @@
 //  WorkoutListView.swift
 //  Do Watch App
 //
-//  Main workout selection screen - Enhanced with contextual intelligence
+//  Main workout selection screen - Enhanced with contextual intelligence and animated icons
 //  Copyright © 2025 Mikiyas Tadesse. All rights reserved.
 //
 
@@ -14,9 +14,6 @@ struct WorkoutListView: View {
     @EnvironmentObject var connectivityManager: WatchConnectivityManager
     @ObservedObject var genieService = GenieService.shared
     @ObservedObject var dailyBricksService = DailyBricksService.shared
-    
-    // Brand colors
-    private let brandOrange = Color(red: 0.969, green: 0.576, blue: 0.122)
     
     let workoutTypes: [(WorkoutType, String, String, Color)] = [
         (.running, "Running", "figure.run", Color.brandOrange),
@@ -91,7 +88,7 @@ struct WorkoutListView: View {
                                 type: activeWorkout.workoutType,
                                 name: "Return to Session",
                                 icon: "play.circle.fill",
-                                color: brandOrange,
+                                color: Color.brandOrange,
                                 isHighlighted: true,
                                 isHero: true
                             )
@@ -109,28 +106,49 @@ struct WorkoutListView: View {
                             smartHeader
                             
                             // 2. Daily Bricks Brickwall
-                            DailyBricksBrickwallView(summary: dailyBricksService.todaySummary)
+                            DailyBricksBrickwallView(summary: dailyBricksService.summary)
                                 .padding(.horizontal, 8)
                             
                             // 3. Join Phone Workout (if available)
-                            if let phoneWorkout = phoneWorkout,
-                               let workoutActive = phoneWorkout["workoutActive"] as? Bool,
-                               workoutActive,
-                               let workoutType = phoneWorkout["workoutType"] as? String {
-                                Button(action: {
-                                    joinPhoneWorkout(phoneWorkout)
-                                }) {
-                                    WorkoutRowCard(
-                                        type: workoutTypeFromString(workoutType),
-                                        name: "Join on iPhone",
-                                        icon: "iphone",
-                                        color: .green,
-                                        isHighlighted: true,
-                                        isHero: true
-                                    )
+                            Group {
+                                if let phoneWorkout = phoneWorkout,
+                                   let workoutActive = phoneWorkout["workoutActive"] as? Bool,
+                                   workoutActive,
+                                   let workoutTypeString = phoneWorkout["workoutType"] as? String {
+                                    
+                                    let workoutType = workoutTypeFromString(workoutTypeString)
+                                    let workoutTypeName = getWorkoutName(for: workoutType)
+                                    
+                                    let userInfo = phoneWorkout["user"] as? [String: Any]
+                                    let userDisplayName = (userInfo?["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let userHandle = (userInfo?["userName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    
+                                    // Build informative join title with workout type
+                                    let joinTitle: String = {
+                                        if let displayName = userDisplayName, !displayName.isEmpty {
+                                            return "Active \(workoutTypeName) - Join \(displayName)"
+                                        } else if let handle = userHandle, !handle.isEmpty {
+                                            return "Active \(workoutTypeName) - Join \(handle)"
+                                        } else {
+                                            return "Active \(workoutTypeName) - Join on iPhone"
+                                        }
+                                    }()
+                                    
+                                    Button(action: {
+                                        joinPhoneWorkout(phoneWorkout)
+                                    }) {
+                                        WorkoutRowCard(
+                                            type: workoutType,
+                                            name: joinTitle,
+                                            icon: "iphone",
+                                            color: .green,
+                                            isHighlighted: true,
+                                            isHero: true
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.horizontal, 8)
                                 }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 8)
                             }
                             
                             // 4. Suggested Workout (Smart Recommendation)
@@ -205,6 +223,34 @@ struct WorkoutListView: View {
                 Task {
                     await dailyBricksService.loadTodayProgress()
                 }
+                
+                // Listen for phone workout updates from application context
+                NotificationCenter.default.addObserver(
+                    forName: NSNotification.Name("PhoneWorkoutUpdate"),
+                    object: nil,
+                    queue: .main
+                ) { [self] notification in
+                    if let userInfo = notification.userInfo {
+                        // Convert [AnyHashable: Any] to [String: Any]
+                        var workoutData: [String: Any] = [:]
+                        for (key, value) in userInfo {
+                            if let stringKey = key as? String {
+                                workoutData[stringKey] = value
+                            }
+                        }
+                        
+                        if let workoutActive = workoutData["workoutActive"] as? Bool, workoutActive {
+                            self.phoneWorkout = workoutData
+                            print("⌚️ [WorkoutListView] Updated phoneWorkout from application context: \(workoutData)")
+                        } else {
+                            self.phoneWorkout = nil
+                            print("⌚️ [WorkoutListView] Cleared phoneWorkout (workout not active)")
+                        }
+                    }
+                }
+            }
+            .onDisappear {
+                NotificationCenter.default.removeObserver(self, name: NSNotification.Name("PhoneWorkoutUpdate"), object: nil)
             }
         }
     }
@@ -244,9 +290,6 @@ struct WorkoutListView: View {
         .padding(.top, 6)
         .padding(.bottom, 4)
     }
-    
-    // MARK: - Daily Bricks Brickwall (replaces Quick Stats Widget)
-    // Now using DailyBricksBrickwallView component above
     
     // MARK: - Helper Methods
     
@@ -416,7 +459,7 @@ struct WorkoutListView: View {
         guard !isCheckingPhoneWorkout else { return }
         isCheckingPhoneWorkout = true
         
-        connectivityManager.requestActiveWorkoutFromPhone { [self] workoutData in
+        connectivityManager.requestActiveWorkout { [self] (workoutData: [String: Any]?) in
             DispatchQueue.main.async {
                 self.isCheckingPhoneWorkout = false
                 if let workoutData = workoutData {
@@ -707,7 +750,7 @@ struct RecentWorkoutCard: View {
     }
 }
 
-// MARK: - Kinetic Row Card (Redesigned)
+// MARK: - Kinetic Row Card (Redesigned with Animated Icons)
 struct WorkoutRowCard: View {
     let type: WorkoutType
     let name: String
@@ -718,7 +761,7 @@ struct WorkoutRowCard: View {
     
     var body: some View {
         HStack(spacing: 10) {
-            // Icon with Enhanced Glow
+            // Icon with Enhanced Glow and Animation
             ZStack {
                 // Outer glow ring
                 Circle()
@@ -747,14 +790,13 @@ struct WorkoutRowCard: View {
                             .stroke(color.opacity(0.6), lineWidth: 1.5)
                     )
                 
-                // Icon
-                if type == .meditation {
-                    Image(systemName: "figure.mind.and.body")
+                // Animated Icon (use AnimatedWorkoutIcon for workout types, static icon for special cases like "iphone")
+                if icon == "iphone" || icon == "play.circle.fill" {
+                    Image(systemName: icon)
                         .font(.system(size: isHero ? 16 : 14, weight: .semibold))
                         .foregroundColor(.white)
                 } else {
-                    Image(systemName: icon)
-                        .font(.system(size: isHero ? 16 : 14, weight: .semibold))
+                    AnimatedWorkoutIcon(type: type, size: isHero ? 16 : 14)
                         .foregroundColor(.white)
                 }
             }
@@ -819,5 +861,118 @@ struct WorkoutRowCard: View {
                 )
         )
         .scaleEffect(isHighlighted ? 1.01 : 1.0)
+    }
+}
+
+// MARK: - Animated Workout Icon
+struct AnimatedWorkoutIcon: View {
+    let type: WorkoutType
+    let size: CGFloat
+    
+    @State private var animationOffset: CGFloat = 0
+    @State private var animationScale: CGFloat = 1.0
+    @State private var animationRotation: Double = 0
+    
+    var body: some View {
+        Image(systemName: iconForWorkoutType(type))
+            .font(.system(size: size))
+            .offset(y: animationOffset)
+            .scaleEffect(animationScale)
+            .rotationEffect(.degrees(animationRotation))
+            .onAppear {
+                startAnimation()
+        }
+    }
+    
+    private func iconForWorkoutType(_ type: WorkoutType) -> String {
+        switch type {
+        case .running: return "figure.run"
+        case .biking: return "figure.outdoor.cycle"
+        case .hiking: return "figure.hiking"
+        case .walking: return "figure.walk"
+        case .swimming: return "figure.pool.swim"
+        case .sports: return "sportscourt"
+        case .gym: return "figure.strengthtraining.traditional"
+        case .meditation: return "figure.mind.and.body"
+        }
+    }
+    
+    private func startAnimation() {
+        switch type {
+        case .meditation:
+            // Gentle floating up and down (breathing motion) - like floating in meditation
+            withAnimation(
+                Animation.easeInOut(duration: 3.0)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationOffset = -5
+            }
+            
+        case .gym:
+            // Pulse/grow animation (flexing muscles) - like muscles expanding
+            withAnimation(
+                Animation.spring(response: 0.6, dampingFraction: 0.5)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationScale = 1.2
+            }
+            
+        case .running:
+            // Forward motion (running) - like moving forward
+            withAnimation(
+                Animation.easeInOut(duration: 0.6)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationOffset = 4
+            }
+            
+        case .biking:
+            // Gentle rotation back and forth (pedaling motion)
+            withAnimation(
+                Animation.easeInOut(duration: 1.0)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationRotation = 12
+            }
+            
+        case .walking:
+            // Gentle bounce (walking motion) - subtle step motion
+            withAnimation(
+                Animation.easeInOut(duration: 1.2)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationOffset = 3
+            }
+            
+        case .hiking:
+            // Slight tilt and lift (mountain climbing) - like ascending
+            withAnimation(
+                Animation.easeInOut(duration: 2.0)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationOffset = -3
+                animationRotation = 6
+            }
+            
+        case .swimming:
+            // Wave motion (swimming strokes) - like gliding through water
+            withAnimation(
+                Animation.easeInOut(duration: 1.5)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationOffset = -4
+                animationRotation = 8
+            }
+            
+        case .sports:
+            // Bounce with slight rotation (ball bouncing) - dynamic movement
+            withAnimation(
+                Animation.spring(response: 0.5, dampingFraction: 0.6)
+                    .repeatForever(autoreverses: true)
+            ) {
+                animationOffset = -3
+                animationScale = 1.12
+            }
+        }
     }
 }

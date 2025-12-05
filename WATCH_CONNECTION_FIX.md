@@ -102,3 +102,7 @@ After applying the fixes:
 - [ ] **iOS app entitlements have App Group configured** (ACTION NEEDED)
 - [x] Watch app is embedded in iOS app bundle
 
+
+
+
+

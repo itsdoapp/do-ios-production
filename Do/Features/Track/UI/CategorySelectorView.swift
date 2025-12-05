@@ -14,126 +14,105 @@ struct CategorySelectorView: View {
     let categories: [(name: String, icon: String)]
     
     var body: some View {
-        ZStack {
-            // Semi-transparent background
-            Color.black.opacity(0.3)
-                .edgesIgnoringSafeArea(.all)
-                .onTapGesture {
+        VStack(spacing: 0) {
+            // Header with current category
+            HStack(spacing: 20) {
+                // Left arrow
+                Button(action: {
                     withAnimation {
-                        isPresented = false
-                    }
-                }
-            
-            VStack(spacing: 0) {
-                // Bottom sheet handle
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(Color.gray.opacity(0.5))
-                    .frame(width: 36, height: 5)
-                    .padding(.top, 8)
-                
-                // Header with current category
-                HStack(spacing: 20) {
-                    // Left arrow
-                    Button(action: {
-                        withAnimation {
-                            let newIndex = (selectedCategory - 1 + categories.count) % categories.count
-                            // This will trigger the binding's setter which will call the delegate
-                            selectedCategory = newIndex
-                            // Close the sheet after a short delay
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                isPresented = false
-                            }
+                        let newIndex = (selectedCategory - 1 + categories.count) % categories.count
+                        // This will trigger the binding's setter which will call the delegate
+                        selectedCategory = newIndex
+                        // Close the sheet after a short delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            isPresented = false
                         }
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.white)
                     }
-                    
-                    // Current category
-                    VStack(spacing: 8) {
-                        ZStack {
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [
-                                            Color(red: 1.0, green: 0.8, blue: 0.0),
-                                            Color(red: 1.0, green: 0.4, blue: 0.0)
-                                        ]),
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
+                }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                
+                // Current category
+                VStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 1.0, green: 0.8, blue: 0.0),
+                                        Color(red: 1.0, green: 0.4, blue: 0.0)
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
                                 )
-                                .frame(width: 60, height: 60)
-                            
-                            Image(systemName: categories[selectedCategory].icon)
-                                .font(.system(size: 24))
-                                .foregroundColor(.white)
-                        }
+                            )
+                            .frame(width: 60, height: 60)
                         
-                        Text(categories[selectedCategory].name)
-                            .font(.system(size: 16, weight: .semibold))
+                        Image(systemName: categories[selectedCategory].icon)
+                            .font(.system(size: 24))
                             .foregroundColor(.white)
                     }
                     
-                    // Right arrow
-                    Button(action: {
-                        withAnimation {
-                            let newIndex = (selectedCategory + 1) % categories.count
-                            // This will trigger the binding's setter which will call the delegate
-                            selectedCategory = newIndex
-                            // Close the sheet after a short delay
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                isPresented = false
-                            }
-                        }
-                    }) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
+                    Text(categories[selectedCategory].name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
                 }
-                .padding(.top, 20)
                 
-                // Categories grid
-                ScrollView {
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: 16) {
-                        ForEach(Array(categories.enumerated()), id: \.offset) { index, category in
-                            CategoryCard(
-                                name: category.name,
-                                icon: category.icon,
-                                isSelected: index == selectedCategory
-                            )
-                            .onTapGesture {
-                                withAnimation {
-                                    selectedCategory = index
-                                    isPresented = false
-                                }
-                            }
+                // Right arrow
+                Button(action: {
+                    withAnimation {
+                        let newIndex = (selectedCategory + 1) % categories.count
+                        // This will trigger the binding's setter which will call the delegate
+                        selectedCategory = newIndex
+                        // Close the sheet after a short delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            isPresented = false
                         }
                     }
-                    .padding()
+                }) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.white)
                 }
             }
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(
-                        LinearGradient(
-                            gradient: Gradient(colors: [
-                                Color(UIColor(red: 0.06, green: 0.09, blue: 0.24, alpha: 1.0)),
-                                Color.black
-                            ]),
-                            startPoint: .top,
-                            endPoint: .bottom
+            .padding(.top, 20)
+            
+            // Categories grid
+            ScrollView {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 16) {
+                    ForEach(Array(categories.enumerated()), id: \.offset) { index, category in
+                        CategoryCard(
+                            name: category.name,
+                            icon: category.icon,
+                            isSelected: index == selectedCategory
                         )
-                    )
-            )
-            .frame(maxHeight: UIScreen.main.bounds.height * 0.8)
-            .transition(.move(edge: .bottom))
+                        .onTapGesture {
+                            withAnimation {
+                                selectedCategory = index
+                                isPresented = false
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
         }
+        .padding(.bottom)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(UIColor(red: 0.06, green: 0.09, blue: 0.24, alpha: 1.0)),
+                    Color.black
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
     }
 }
 

@@ -56,16 +56,28 @@ class AuthService: ObservableObject {
             legacyUser.userID = userId
             legacyUser.userName = UserDefaults.standard.string(forKey: "username")
             legacyUser.email = UserDefaults.standard.string(forKey: "email")
+            legacyUser.name = UserDefaults.standard.string(forKey: "name")
+            legacyUser.bio = UserDefaults.standard.string(forKey: "bio")
             
             print("🔐 [AuthService] Loading basic user: userID=\(userId), userName=\(legacyUser.userName ?? "nil")")
             CurrentUserService.shared.updateUser(legacyUser)
             print("🔐 [AuthService] Loaded basic user data to CurrentUserService (userID: \(userId))")
             
-            // Fetch full user profile in background
-            Task {
-                print("🔐 [AuthService] Starting background profile fetch...")
-                await fetchOrCreateUserProfile(userId: userId)
-                print("🔐 [AuthService] Background profile fetch complete")
+            // Check if we already have complete profile data before fetching
+            let hasCompleteProfile = legacyUser.userName != nil && 
+                                    legacyUser.email != nil && 
+                                    !legacyUser.userName!.isEmpty
+            
+            // Only fetch if we don't have complete profile data
+            if !hasCompleteProfile {
+                // Fetch full user profile in background
+                Task {
+                    print("🔐 [AuthService] Starting background profile fetch (incomplete profile data)...")
+                    await fetchOrCreateUserProfile(userId: userId)
+                    print("🔐 [AuthService] Background profile fetch complete")
+                }
+            } else {
+                print("📦 [AuthService] Using cached profile data, skipping fetch")
             }
         } else {
             print("🔐 [AuthService] No valid auth found in keychain, user not authenticated")
@@ -132,10 +144,6 @@ class AuthService: ObservableObject {
                     CurrentUserService.shared.updateUser(legacyUser)
                     print("🔐 [AuthService] Synced user to CurrentUserService")
                 }
-                
-                // Sync tokens to Apple Watch
-                print("🔐 [AuthService] Syncing tokens to Apple Watch...")
-                CrossDeviceAuthManager.shared.syncTokensToWatch()
                 
                 print("🔐 [AuthService] Posting AuthStateChanged notification")
                 NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
@@ -217,18 +225,10 @@ class AuthService: ObservableObject {
         let userId = try decodeUserId(from: tokens.idToken)
         _ = keychainManager.save(userId, forKey: Constants.Keychain.userId)
         
-        // Save to UserDefaults for compatibility
-        UserDefaults.standard.set(userId, forKey: "cognito_user_id")
-        UserDefaults.standard.set(userId, forKey: "userId")
-        
         await fetchCurrentUser(userId: userId)
         
         await MainActor.run {
             isAuthenticated = true
-            
-            // Sync tokens to Apple Watch
-            CrossDeviceAuthManager.shared.syncTokensToWatch()
-            
             NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
         }
     }
@@ -250,18 +250,10 @@ class AuthService: ObservableObject {
         let userId = try decodeUserId(from: tokens.idToken)
         _ = keychainManager.save(userId, forKey: Constants.Keychain.userId)
         
-        // Save to UserDefaults for compatibility
-        UserDefaults.standard.set(userId, forKey: "cognito_user_id")
-        UserDefaults.standard.set(userId, forKey: "userId")
-        
         await fetchCurrentUser(userId: userId)
         
         await MainActor.run {
             isAuthenticated = true
-            
-            // Sync tokens to Apple Watch
-            CrossDeviceAuthManager.shared.syncTokensToWatch()
-            
             NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
         }
     }
@@ -286,10 +278,6 @@ class AuthService: ObservableObject {
         currentUser = nil
         isAuthenticated = false
         CurrentUserService.shared.clearUser()
-        
-        // Sync logout to Apple Watch
-        print("🔐 [AuthService] Syncing logout to Apple Watch...")
-        CrossDeviceAuthManager.shared.logout()
         
         // Notify
         NotificationCenter.default.post(name: NSNotification.Name("AuthStateChanged"), object: nil)
@@ -325,37 +313,116 @@ class AuthService: ObservableObject {
     
     // MARK: - Private Helpers
     
-    private func fetchOrCreateUserProfile(userId: String) async {
-        do {
-            // Lambda will handle cognitoSub lookup automatically
-            let user = try await UserService.shared.getUser(userId: userId)
+    private func fetchOrCreateUserProfile(userId: String, retryCount: Int = 0) async {
+        // Prevent infinite recursion - limit retries to 1 attempt
+        guard retryCount <= 1 else {
+            print("❌ [AuthService] Maximum retry limit reached for fetchOrCreateUserProfile. Aborting to prevent infinite loop.")
+            return
+        }
+        
+        // Check ProfileViewModel cache first
+        let cacheKey = userId
+        if let cached = ProfileViewModel.getCachedProfile(for: cacheKey), !cached.isExpired {
+            print("📦 [AuthService] Using cached profile from ProfileViewModel")
             await MainActor.run {
-                self.currentUser = user
+                var legacyUser = cached.profile
+                CurrentUserService.shared.updateUser(legacyUser)
+                
+                // Save to UserDefaults for quick access
+                UserDefaults.standard.set(legacyUser.userName, forKey: "username")
+                UserDefaults.standard.set(legacyUser.email, forKey: "email")
+                UserDefaults.standard.set(legacyUser.name, forKey: "name")
+                UserDefaults.standard.set(legacyUser.bio, forKey: "bio")
+                
+                print("✅ [AuthService] Synced cached user to CurrentUserService: \(legacyUser.userName ?? "unknown")")
+            }
+            return
+        }
+        
+        do {
+            // Use ProfileAPIService instead of UserService (newer Lambda-based API)
+            // Try all user IDs (Parse ID first, then Cognito ID)
+            let userIdsToTry = UserIDResolver.shared.getUserIdsForDataFetch()
+            
+            var profileResponse: UserProfileResponse?
+            var lastError: Error?
+            
+            for userIdToTry in userIdsToTry {
+                do {
+                    print("🌐 [AuthService] Trying to fetch profile with user ID: \(userIdToTry)")
+                    let response = try await ProfileAPIService.shared.fetchUserProfile(
+                        userId: userIdToTry,
+                        currentUserId: userIdToTry,
+                        includeFollowers: false,
+                        includeFollowing: false
+                    )
+                    profileResponse = response
+                    print("✅ [AuthService] Successfully fetched profile using user ID: \(userIdToTry)")
+                    break
+                } catch {
+                    print("⚠️ [AuthService] Error fetching profile with user ID \(userIdToTry): \(error.localizedDescription)")
+                    lastError = error
+                    // Continue to next user ID
+                }
+            }
+            
+            guard let profileResponse = profileResponse, let userData = profileResponse.data?.user else {
+                // Check if it's a 404 (user not found) before trying to create
+                if let networkError = lastError as? NetworkError,
+                   case .httpError(let statusCode, _) = networkError, statusCode == 404 {
+                    print("⚠️ [AuthService] User profile not found (404), creating... (retryCount: \(retryCount))")
+                    await createUserProfile(userId: userId, retryCount: retryCount + 1)
+                } else {
+                    print("⚠️ [AuthService] Error fetching user profile: \(lastError?.localizedDescription ?? "unknown") - not a 404, using cached data if available")
+                    // Don't try to create if it's not a 404 - user might already exist
+                    // Use cached data from CurrentUserService if available
+                }
+                return
+            }
+            
+            await MainActor.run {
+                // Convert ProfileAPIUser to UserModel
+                var legacyUser = UserModel()
+                legacyUser.userID = userData.userId
+                legacyUser.userName = userData.username ?? ""
+                legacyUser.email = userData.email
+                legacyUser.name = userData.name
+                legacyUser.bio = userData.bio
+                legacyUser.profilePictureUrl = userData.profilePictureUrl
+                legacyUser.privacyToggle = userData.privacyToggle
                 
                 // Save to UserDefaults for quick access on next launch
-                UserDefaults.standard.set(user.username, forKey: "username")
-                UserDefaults.standard.set(user.email, forKey: "email")
-                UserDefaults.standard.set(user.name, forKey: "name")
+                UserDefaults.standard.set(legacyUser.userName, forKey: "username")
+                UserDefaults.standard.set(legacyUser.email, forKey: "email")
+                UserDefaults.standard.set(legacyUser.name, forKey: "name")
+                UserDefaults.standard.set(legacyUser.bio, forKey: "bio")
                 
-                // Sync to CurrentUserService for legacy code
-                var legacyUser = UserModel()
-                legacyUser.userID = user.id
-                legacyUser.userName = user.username
-                legacyUser.email = user.email
-                legacyUser.name = user.name
-                legacyUser.profilePictureUrl = user.profilePictureUrl
+                // Sync to CurrentUserService
                 CurrentUserService.shared.updateUser(legacyUser)
-                print("✅ [AuthService] Synced user to CurrentUserService: \(user.username)")
+                print("✅ [AuthService] Synced user to CurrentUserService: \(legacyUser.userName ?? "unknown")")
+                
+                // Cache in ProfileViewModel for future use
+                ProfileViewModel.cacheProfile(
+                    user: legacyUser,
+                    followerCount: profileResponse.data?.followerCount ?? 0,
+                    followingCount: profileResponse.data?.followingCount ?? 0,
+                    isCurrentUser: true
+                )
             }
-            print("✅ [AuthService] User profile loaded")
+            print("✅ [AuthService] User profile loaded and cached")
         } catch {
-            // If user doesn't exist (404), create it
-            print("⚠️ [AuthService] User profile not found, creating...")
-            await createUserProfile(userId: userId)
+            print("⚠️ [AuthService] Unexpected error fetching user profile: \(error.localizedDescription)")
+            // Use cached data from CurrentUserService if available - don't fail completely
         }
     }
     
-    private func createUserProfile(userId: String) async {
+    private func createUserProfile(userId: String, retryCount: Int = 0) async {
+        // Prevent infinite recursion - limit retries to 1 attempt
+        guard retryCount <= 1 else {
+            print("❌ [AuthService] Maximum retry limit reached for createUserProfile. Aborting to prevent infinite loop.")
+            return
+        }
+        
         do {
             // Get email and username from ID token (already decoded)
             guard let idToken = keychainManager.get(Constants.Keychain.idToken) else {
@@ -369,7 +436,7 @@ class AuthService: ObservableObject {
             let username = claims["cognito:username"] as? String ?? claims["preferred_username"] as? String ?? email.components(separatedBy: "@").first ?? "user"
             let name = claims["name"] as? String
             
-            print("📝 [AuthService] Creating user profile for: \(username) (\(email))")
+            print("📝 [AuthService] Creating user profile for: \(username) (\(email)) (retryCount: \(retryCount))")
             let user = try await UserService.shared.createUser(
                 userId: userId,
                 username: username,
@@ -396,6 +463,26 @@ class AuthService: ObservableObject {
                 print("✅ [AuthService] Synced new user to CurrentUserService: \(user.username)")
             }
             print("✅ [AuthService] User profile created successfully")
+        } catch let error as APIError {
+            // Handle specific error cases
+            if case .serverError(let statusCode) = error {
+                if statusCode == 403 {
+                    print("⚠️ [AuthService] User creation failed with 403 - user may already exist or token invalid (retryCount: \(retryCount))")
+                    // Only retry once - if we get 403 again, the user likely doesn't have permission or already exists
+                    if retryCount < 1 {
+                        print("⚠️ [AuthService] Attempting to fetch user profile again (retry \(retryCount + 1)/1)...")
+                        // Try fetching again - user might have been created by another process
+                        await fetchOrCreateUserProfile(userId: userId, retryCount: retryCount + 1)
+                    } else {
+                        print("❌ [AuthService] User creation failed with 403 after retry. User may not have permission or already exists. Aborting.")
+                    }
+                } else {
+                    print("❌ [AuthService] Failed to create user profile: serverError(\(statusCode))")
+                }
+            } else {
+                print("❌ [AuthService] Failed to create user profile: \(error)")
+            }
+            // Don't fail auth if profile creation fails
         } catch {
             print("❌ [AuthService] Failed to create user profile: \(error)")
             // Don't fail auth if profile creation fails
@@ -466,3 +553,4 @@ class AuthService: ObservableObject {
         return sub
     }
 }
+

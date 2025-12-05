@@ -11,10 +11,6 @@ import HealthKit
 import Combine
 import WatchConnectivity
 
-// Note: workoutSession, movement, and set are defined in Do/Common/Models/WorkoutModels.swift
-// Note: GymWorkoutMetrics is defined in Do/Do Watch App/Models/GymWorkoutMetrics.swift
-// These should be accessible if the files are in the same target
-
 class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
     static let shared = GymTrackingEngine()
     
@@ -209,9 +205,9 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
         ]
         
         if session.isReachable {
-            session.sendMessage(setData, replyHandler: nil) { error in
-                print("❌ [GymTrackingEngine] Error syncing set: \(error.localizedDescription)")
-            }
+            session.sendMessage(setData, replyHandler: nil, errorHandler: { error in
+                print("❌ [GymTrackingEngine] Error sending set data: \(error.localizedDescription)")
+            })
         } else {
             do {
                 try session.updateApplicationContext(setData)
@@ -233,9 +229,9 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
         ]
         
         if session.isReachable {
-            session.sendMessage(movementData, replyHandler: nil) { error in
-                print("❌ [GymTrackingEngine] Error syncing movement: \(error.localizedDescription)")
-            }
+            session.sendMessage(movementData, replyHandler: nil, errorHandler: { error in
+                print("❌ [GymTrackingEngine] Error sending movement data: \(error.localizedDescription)")
+            })
         } else {
             do {
                 try session.updateApplicationContext(movementData)
@@ -279,9 +275,9 @@ class GymTrackingEngine: NSObject, ObservableObject, WCSessionDelegate {
         ]
         
         if session.isReachable {
-            session.sendMessage(metrics, replyHandler: nil) { error in
-                print("❌ [GymTrackingEngine] Error syncing metrics: \(error.localizedDescription)")
-            }
+            session.sendMessage(metrics, replyHandler: nil, errorHandler: { error in
+                print("❌ [GymTrackingEngine] Error sending metrics: \(error.localizedDescription)")
+            })
         } else {
             do {
                 try session.updateApplicationContext(metrics)

@@ -27,6 +27,36 @@ enum WorkoutType: String, Codable {
     case meditation = "meditation"
 }
 
+// MARK: - HealthKit Activity Type Conversion
+
+#if os(watchOS)
+import HealthKit
+
+extension WorkoutType {
+    /// Converts WorkoutType to HKWorkoutActivityType for HealthKit integration
+    func toHKWorkoutActivityType() -> HKWorkoutActivityType {
+        switch self {
+        case .running:
+            return HKWorkoutActivityType.running
+        case .biking:
+            return HKWorkoutActivityType.cycling
+        case .hiking:
+            return HKWorkoutActivityType.hiking
+        case .walking:
+            return HKWorkoutActivityType.walking
+        case .swimming:
+            return HKWorkoutActivityType.swimming
+        case .sports:
+            return HKWorkoutActivityType.traditionalStrengthTraining // Default for sports
+        case .gym:
+            return HKWorkoutActivityType.traditionalStrengthTraining
+        case .meditation:
+            return HKWorkoutActivityType.mindAndBody // Meditation uses mindAndBody in HealthKit
+        }
+    }
+}
+#endif
+
 // MARK: - Handoff Message Structure
 
 struct WorkoutHandoffMessage: Codable {

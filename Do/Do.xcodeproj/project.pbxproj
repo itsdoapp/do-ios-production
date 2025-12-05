@@ -180,6 +180,7 @@
 		90892EA72EDB3B8C00720834 /* ModernEditSessionViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90892EA62EDB3B8C00720834 /* ModernEditSessionViewController.swift */; };
 		90892EA92EDB3D9700720834 /* ModernEditPlanViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90892EA82EDB3D9700720834 /* ModernEditPlanViewController.swift */; };
 		90892EAB2EDB3EC900720834 /* WorkoutHistoryVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90892EAA2EDB3EC900720834 /* WorkoutHistoryVC.swift */; };
+		90A965082EE0F3DF0034FE81 /* UserListCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90A965072EE0F3DF0034FE81 /* UserListCacheManager.swift */; };
 		90BEBF9C2EDA4AD70084BAC5 /* TrackingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BEBF9B2EDA4AD70084BAC5 /* TrackingModels.swift */; };
 		90BEBF9D2EDA4AD70084BAC5 /* RunAnalysisHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BEBF9A2EDA4AD70084BAC5 /* RunAnalysisHelpers.swift */; };
 		90BEBF9E2EDA4AD70084BAC5 /* GymInsightsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BEBF992EDA4AD70084BAC5 /* GymInsightsModels.swift */; };
@@ -575,6 +576,7 @@
 		90892EA62EDB3B8C00720834 /* ModernEditSessionViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModernEditSessionViewController.swift; sourceTree = "<group>"; };
 		90892EA82EDB3D9700720834 /* ModernEditPlanViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModernEditPlanViewController.swift; sourceTree = "<group>"; };
 		90892EAA2EDB3EC900720834 /* WorkoutHistoryVC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutHistoryVC.swift; sourceTree = "<group>"; };
+		90A965072EE0F3DF0034FE81 /* UserListCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserListCacheManager.swift; sourceTree = "<group>"; };
 		90BEBF982EDA4AD70084BAC5 /* BikingTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BikingTypes.swift; sourceTree = "<group>"; };
 		90BEBF992EDA4AD70084BAC5 /* GymInsightsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GymInsightsModels.swift; sourceTree = "<group>"; };
 		90BEBF9A2EDA4AD70084BAC5 /* RunAnalysisHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunAnalysisHelpers.swift; sourceTree = "<group>"; };
@@ -1334,6 +1336,7 @@
 		9013C8402EDA71F80077085B /* Profile */ = {
 			isa = PBXGroup;
 			children = (
+				90A965072EE0F3DF0034FE81 /* UserListCacheManager.swift */,
 				9013C83D2EDA71F80077085B /* ModernUserCell.swift */,
 				9013C83E2EDA71F80077085B /* ModernUserListViewController.swift */,
 				9013C83F2EDA71F80077085B /* ProfileViewController.swift */,
@@ -2173,6 +2176,7 @@
 				9013C8102EDA6BB10077085B /* FitbitDevice.swift in Sources */,
 				9013C8112EDA6BB10077085B /* HealthKitDeviceDetector.swift in Sources */,
 				9013C8122EDA6BB10077085B /* OuraRingAuth.swift in Sources */,
+				90A965082EE0F3DF0034FE81 /* UserListCacheManager.swift in Sources */,
 				9013C8132EDA6BB10077085B /* AppleWatchMetricsProvider.swift in Sources */,
 				9013C8142EDA6BB10077085B /* FitbitHealthKitBridge.swift in Sources */,
 				9013C8152EDA6BB10077085B /* FitbitAPI.swift in Sources */,
@@ -2638,7 +2642,6 @@
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Do;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2724,7 +2727,6 @@
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Do;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -99,7 +99,9 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     
     // Add property to track last location update time
     private var lastProcessedLocationTime: Date = Date.distantPast
+    private var firstLocationTime: Date? // Track when first location was received
     private let locationUpdateThrottleInterval: TimeInterval = 1.0 // seconds
+    private let warmupPeriod: TimeInterval = 10.0 // Accept locations more frequently during first 10 seconds
     
     // Add property to track location failures
     private var locationFailureCount = 0
@@ -140,6 +142,53 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             }
         }
         
+        // Check authorization status first
+        let authStatus = manager.authorizationStatus
+        if authStatus == .notDetermined {
+            print("📍 [SMART] Authorization not determined, requesting...")
+            manager.requestWhenInUseAuthorization()
+            // Will start location in locationManagerDidChangeAuthorization callback
+            return
+        }
+        
+        guard authStatus == .authorizedWhenInUse || authStatus == .authorizedAlways else {
+            print("⚠️ [SMART] Authorization denied/restricted: \(authStatus.rawValue)")
+            return
+        }
+        
+        // For weather/route fetching, use one-time request instead of continuous updates
+        // This prevents unnecessary location updates after we have what we need
+        if reason == .weatherFetch || reason == .routeDisplay {
+            // Use cached location if available and recent (within 10 minutes)
+            if let cachedLocation = self.location,
+               Date().timeIntervalSince(cachedLocation.timestamp) < 600 {
+                print("📍 [SMART] Using cached location for \(reason.rawValue) (age: \(Int(Date().timeIntervalSince(cachedLocation.timestamp)))s)")
+                // Notify that we have a location (will trigger weather/route loading)
+                NotificationCenter.default.post(
+                    name: .locationDidUpdate,
+                    object: self,
+                    userInfo: ["location": cachedLocation]
+                )
+                // Auto-stop after a short delay to ensure we don't keep location active
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    self?.stopLocation(for: reason)
+                }
+                return
+            }
+            
+            // If no cached location or it's stale, request one-time location
+            print("📍 [SMART] Requesting one-time location for \(reason.rawValue)")
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                self?.requestLocation()
+            }
+            // Auto-stop after 30 seconds to ensure we don't keep location active
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                self?.stopLocation(for: reason)
+            }
+            return
+        }
+        
+        // For other reasons (active workout, etc.), use continuous updates
         // Start location if not already active
         if !isLocationActive {
             print("📍 [SMART] Starting location services")
@@ -233,29 +282,11 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     // MARK: - Public Methods
     
     func requestWhenInUseAuthorization() {
-        // Check authorization status first to avoid unnecessary calls
-        let currentStatus = manager.authorizationStatus
-        guard currentStatus == .notDetermined else {
-            print("📍 Authorization already determined: \(currentStatus.rawValue), skipping request")
-            return
-        }
-        // Dispatch to main thread to avoid UI unresponsiveness warning
-        DispatchQueue.main.async { [weak self] in
-            self?.manager.requestWhenInUseAuthorization()
-        }
+        manager.requestWhenInUseAuthorization()
     }
     
     func requestAlwaysAuthorization() {
-        // Check authorization status first to avoid unnecessary calls
-        let currentStatus = manager.authorizationStatus
-        guard currentStatus == .notDetermined || currentStatus == .authorizedWhenInUse else {
-            print("📍 Authorization status: \(currentStatus.rawValue), skipping always request")
-            return
-        }
-        // Dispatch to main thread to avoid UI unresponsiveness warning
-        DispatchQueue.main.async { [weak self] in
-            self?.manager.requestAlwaysAuthorization()
-        }
+        manager.requestAlwaysAuthorization()
     }
     
     func startUpdatingLocation() {
@@ -279,6 +310,10 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             }
             return
         }
+        
+        // CRITICAL: Reset location tracking state when starting fresh
+        firstLocationTime = nil
+        lastProcessedLocationTime = Date.distantPast
         
         // Ensure delegate is set correctly
         if manager.delegate !== self {
@@ -426,6 +461,44 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         }
     }
     
+    /// Safely enable background location updates
+    /// This can only be set when authorized with "Always" permission and the app has the proper capability
+    /// Returns true if successfully enabled, false otherwise
+    /// 
+    /// IMPORTANT: This requires:
+    /// 1. "Location updates" in UIBackgroundModes in Info.plist
+    /// 2. .authorizedAlways authorization status
+    /// 3. Background refresh to be available
+    /// 
+    /// If any of these conditions aren't met, this will return false and the app will
+    /// continue tracking location in the foreground only.
+    func safelyEnableBackgroundLocationUpdates() -> Bool {
+        let authStatus = manager.authorizationStatus
+        
+        // CRITICAL: Background location updates require "Always" authorization
+        // Setting this with "When In Use" authorization will cause an assertion failure
+        guard authStatus == .authorizedAlways else {
+            print("⚠️ [ModernLocationManager] Cannot enable background location updates: requires 'Always' authorization, but status is \(authStatus.rawValue)")
+            return false
+        }
+        
+        // Check if background refresh is available
+        guard UIApplication.shared.backgroundRefreshStatus == .available else {
+            print("⚠️ [ModernLocationManager] Background refresh not available - skipping background location updates")
+            return false
+        }
+        
+        // Attempt to enable background location updates
+        // NOTE: This will cause an assertion failure if:
+        // 1. The app doesn't have "Location updates" in UIBackgroundModes in Info.plist
+        // 2. The authorization is not .authorizedAlways
+        // We've checked authorization above, but the capability check happens at the CLLocationManager level
+        // and cannot be caught with Swift error handling (it's an Objective-C assertion)
+        manager.allowsBackgroundLocationUpdates = true
+        print("✅ [ModernLocationManager] Background location updates enabled")
+        return true
+    }
+    
     func startTracking() {
         print("📍 [SMART] Starting tracking mode")
         isTracking = true
@@ -438,7 +511,27 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         averagePace = 0
         speedReadings = []
         distanceSegments = []
-        manager.allowsBackgroundLocationUpdates = true
+        
+        // Request authorization if needed before starting tracking
+        let authStatus = manager.authorizationStatus
+        if authStatus == .notDetermined {
+            print("📍 [SMART] Authorization not determined, requesting...")
+            manager.requestWhenInUseAuthorization()
+            // Will continue in locationManagerDidChangeAuthorization callback
+            return
+        }
+        
+        // If we have "When In Use" but need background tracking, request "Always"
+        if authStatus == .authorizedWhenInUse {
+            print("📍 [SMART] Requesting 'Always' authorization for background tracking...")
+            manager.requestAlwaysAuthorization()
+            // Authorization request is asynchronous - will continue in locationManagerDidChangeAuthorization callback
+            // The callback will enable background location updates when authorization changes to .authorizedAlways
+            return
+        }
+        
+        // Safely enable background location updates (only if authorized)
+        _ = safelyEnableBackgroundLocationUpdates()
         manager.pausesLocationUpdatesAutomatically = false
         
         // Use smart location request
@@ -544,7 +637,8 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                     self.startUpdatingLocation()
                 }
                 if self.isTracking {
-                    manager.allowsBackgroundLocationUpdates = true
+                    // Safely enable background location updates when authorization changes
+                    _ = self.safelyEnableBackgroundLocationUpdates()
                     manager.pausesLocationUpdatesAutomatically = false
                 }
             default:
@@ -569,29 +663,47 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                 let now = Date()
                 let timeSinceLastUpdate = now.timeIntervalSince(self.lastProcessedLocationTime)
                 
-                // Accept first location immediately; then accept any accuracy <= 65m within first 10s
-                let isWithinWarmup = now.timeIntervalSince(self.lastProcessedLocationTime) == 0 ? true : (now.timeIntervalSince(self.lastProcessedLocationTime) < 10)
-                
                 print("📍 Location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
                 print("📍 Accuracy: \(location.horizontalAccuracy)m")
                 print("📍 Is first location: \(self.location == nil)")
                 
                 // CRITICAL: Accept first location regardless of accuracy
-                // For subsequent locations, apply accuracy and time filtering
                 let isFirstLocation = self.location == nil
-                let hasGoodAccuracy = location.horizontalAccuracy <= 20 || (isWithinWarmup && location.horizontalAccuracy <= 65)
-                let enoughTimePassed = timeSinceLastUpdate >= self.locationUpdateThrottleInterval
                 
                 if isFirstLocation {
                     print("📍 First location received: accuracy=\(location.horizontalAccuracy)m")
-                    self.lastProcessedLocationTime = now
-                    self.processLocationUpdate(location)
-                } else if hasGoodAccuracy && enoughTimePassed {
-                    print("📍 Subsequent location accepted")
+                    self.firstLocationTime = now
                     self.lastProcessedLocationTime = now
                     self.processLocationUpdate(location)
                 } else {
-                    print("📍 Location rejected: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    // For subsequent locations, check if we're in warmup period
+                    let timeSinceFirstLocation = self.firstLocationTime.map { now.timeIntervalSince($0) } ?? Double.infinity
+                    let isWithinWarmup = timeSinceFirstLocation < self.warmupPeriod
+                    
+                    // During warmup: accept locations with accuracy <= 65m, with relaxed time requirement (0.5s instead of 1s)
+                    // After warmup: accept locations with accuracy <= 20m, with normal time requirement (1s)
+                    let hasGoodAccuracy: Bool
+                    let enoughTimePassed: Bool
+                    
+                    if isWithinWarmup {
+                        // Warmup period: more lenient
+                        hasGoodAccuracy = location.horizontalAccuracy <= 65
+                        enoughTimePassed = timeSinceLastUpdate >= 0.5 // Accept every 0.5s during warmup
+                        print("📍 Warmup period: timeSinceFirst=\(String(format: "%.1f", timeSinceFirstLocation))s, goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    } else {
+                        // Normal operation: stricter
+                        hasGoodAccuracy = location.horizontalAccuracy <= 20
+                        enoughTimePassed = timeSinceLastUpdate >= self.locationUpdateThrottleInterval
+                        print("📍 Normal period: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    }
+                    
+                    if hasGoodAccuracy && enoughTimePassed {
+                        print("📍 Subsequent location accepted")
+                        self.lastProcessedLocationTime = now
+                        self.processLocationUpdate(location)
+                    } else {
+                        print("📍 Location rejected: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    }
                 }
             }
         }
@@ -838,8 +950,8 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             return
         }
         
-        // Ensure background updates are enabled
-        manager.allowsBackgroundLocationUpdates = true
+        // Safely ensure background updates are enabled
+        _ = safelyEnableBackgroundLocationUpdates()
         manager.pausesLocationUpdatesAutomatically = false
         
         // Start location updates if not already running

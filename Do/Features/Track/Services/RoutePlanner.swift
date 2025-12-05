@@ -819,38 +819,8 @@ class RoutePlanner: ObservableObject {
     
     /// Find bike-friendly trails using OpenStreetMap data
     func findBikeFriendlyTrails(radius: Double = 10000, completion: ((Bool) -> Void)? = nil) {
-        guard let userLocation = locationManager.location?.coordinate else {
-            print("Cannot find trails: location unknown")
-            DispatchQueue.main.async {
-                completion?(false)
-            }
-            return
-        }
-        
-        isGeneratingRoute = true
-        
-        // Simplified query focused on cycling infrastructure
-        let query = """
-        [out:json][timeout:30];
-        (
-          // Bike-specific infrastructure
-          way["highway"="cycleway"](around:\(radius),\(userLocation.latitude),\(userLocation.longitude));
-          way["bicycle"="designated"](around:\(radius),\(userLocation.latitude),\(userLocation.longitude));
-          
-          // Bike-friendly paths
-          way["highway"="path"]["bicycle"="yes"](around:\(radius),\(userLocation.latitude),\(userLocation.longitude));
-          
-          // Named paths and parks
-          way["leisure"="park"]["name"](around:\(radius),\(userLocation.latitude),\(userLocation.longitude));
-        );
-        out body 15;
-        >;
-        out skel qt 15;
-        """
-        
-        getTrailsFromOverpass(query: query, activityType: .biking) { success in
-            completion?(success)
-        }
+        // Use the unified findTrailsForActivity method for consistency and better caching
+        findTrailsForActivity(.biking, radius: radius, completion: completion)
     }
     
     /// Find hiking trails using OpenStreetMap data

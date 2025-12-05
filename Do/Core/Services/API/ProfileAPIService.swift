@@ -16,12 +16,13 @@ class ProfileAPIService {
     
     // Lambda Function URLs (do-app AWS account)
     private let getUserProfileURL = "https://ggvxvxhkvyq4eezg7zt2rvssga0hmbza.lambda-url.us-east-1.on.aws/"
-    private let updateUserProfileURL = "https://gzmkb2efnyvruf4uv7iem3hvgq0gbcjw.lambda-url.us-east-1.on.aws/" // TODO: Create URL
-    private let getFollowStatusURL = "https://obxgks3zj5p2stzkenr4emxufq0cpjea.lambda-url.us-east-1.on.aws/" // TODO: Create URL
+    private let updateUserProfileURL = "https://gzmkb2efnyvruf4uv7iem3hvgq0gbcjw.lambda-url.us-east-1.on.aws/"
+    private let getFollowStatusURL = "https://obxgks3zj5p2stzkenr4emxufq0cpjea.lambda-url.us-east-1.on.aws/"
     private let createFollowURL = "https://wfsqq4ukr3id2gb7dre6vkzdpa0kqubt.lambda-url.us-east-1.on.aws/"
     private let deleteFollowURL = "https://5ym5qssgjmcffolye5ikzbgc3u0jdnkm.lambda-url.us-east-1.on.aws/"
     private let getFollowersURL = "https://vfavih6e5ktwzhegwvyhid6aci0frbfo.lambda-url.us-east-1.on.aws/"
     private let getFollowingURL = "https://ummss73ayfra4k3sixwot3amlq0rymlw.lambda-url.us-east-1.on.aws/"
+    private let deleteAccountURL = "https://5mqgc72v4k6arc2kxtifxx3thm0roavi.lambda-url.us-east-1.on.aws/"
     
     private init() {
         let config = URLSessionConfiguration.default
@@ -32,11 +33,40 @@ class ProfileAPIService {
     
     // MARK: - Authentication Helper
     
+    /// Get a valid auth token, refreshing if expired
+    private func getValidAuthToken() async -> String? {
+        // Try to get token from Keychain first (more secure, primary source)
+        if let idToken = KeychainManager.shared.get(Constants.Keychain.idToken) {
+            // Check if token is expired
+            if AWSCognitoAuth.shared.isTokenExpired() {
+                print("🔐 [ProfileAPI] Token is expired, attempting refresh...")
+                do {
+                    try await AWSCognitoAuth.shared.refreshToken()
+                    // Try again after refresh
+                    if let refreshedToken = KeychainManager.shared.get(Constants.Keychain.idToken) {
+                        print("🔐 [ProfileAPI] ✅ Token refreshed successfully")
+                        return refreshedToken
+                    }
+                } catch {
+                    print("🔐 [ProfileAPI] ⚠️ Token refresh failed: \(error.localizedDescription)")
+                    // Continue with original token if refresh fails
+                }
+            }
+            return idToken
+        } else if let idToken = UserDefaults.standard.string(forKey: "cognito_id_token"), !idToken.isEmpty {
+            // Fallback to UserDefaults if Keychain doesn't have it
+            return idToken
+        }
+        return nil
+    }
+    
     /// Add Cognito JWT token to request headers
-    private func addAuthHeaders(to request: inout URLRequest) {
-        // Try to get token from UserDefaults
-        if let idToken = UserDefaults.standard.string(forKey: "cognito_id_token") {
+    private func addAuthHeaders(to request: inout URLRequest) async {
+        if let idToken = await getValidAuthToken() {
             request.setValue("Bearer \(idToken)", forHTTPHeaderField: "Authorization")
+            print("🔐 [ProfileAPI] Added auth token")
+        } else {
+            print("⚠️ [ProfileAPI] No auth token available - request may fail with 403")
         }
     }
     
@@ -87,7 +117,7 @@ class ProfileAPIService {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
         let (data, response) = try await session.data(for: request)
         
@@ -133,19 +163,138 @@ class ProfileAPIService {
     ///   - fields: Dictionary of fields to update
     /// - Returns: Updated ProfileAPIUser
     func updateUserProfile(userId: String, fields: [String: Any]) async throws -> ProfileAPIUser {
-        guard let url = URL(string: updateUserProfileURL) else {
+        print("💾 [ProfileAPI] Updating profile for userId: '\(userId)'")
+        print("💾 [ProfileAPI] Update URL: \(updateUserProfileURL)")
+        print("💾 [ProfileAPI] Fields to update: \(fields.keys.joined(separator: ", "))")
+        
+        // Try adding userId as query parameter first (some Lambdas expect it there)
+        var components = URLComponents(string: updateUserProfileURL)
+        components?.queryItems = [URLQueryItem(name: "userId", value: userId)]
+        
+        guard let url = components?.url else {
+            print("❌ [ProfileAPI] Invalid update URL: \(updateUserProfileURL)")
             throw NetworkError.invalidURL
         }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
-        var body: [String: Any] = ["userId": userId]
+        // Add user ID header (required for authorization)
+        request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        
+        // Log if Authorization header was added
+        if let authHeader = request.value(forHTTPHeaderField: "Authorization") {
+            print("🔐 [ProfileAPI] Authorization header present: \(authHeader.prefix(50))...")
+        } else {
+            print("⚠️ [ProfileAPI] No Authorization header - request will likely fail")
+        }
+        print("🔐 [ProfileAPI] X-User-Id header: \(userId)")
+        print("🔐 [ProfileAPI] Query parameter userId: \(userId)")
+        
+        // Build request body - include userId in body as well (multiple sources for compatibility)
+        var body: [String: Any] = [:]
+        body["userId"] = userId  // Ensure userId is in body
         body.merge(fields) { (_, new) in new }
         
+        // Log request body (full body for debugging)
+        let jsonData = try JSONSerialization.data(withJSONObject: body)
+        if let jsonString = String(data: jsonData, encoding: .utf8) {
+            print("💾 [ProfileAPI] Request body: \(jsonString)")
+        }
+        
+        request.httpBody = jsonData
+        
+        // Log JWT token claims for debugging (to verify userId is in token)
+        if let idToken = await getValidAuthToken(),
+           let tokenSegments = idToken.components(separatedBy: ".").dropFirst().first {
+            var base64 = String(tokenSegments)
+            let remainder = base64.count % 4
+            if remainder > 0 {
+                base64 = base64.padding(toLength: base64.count + 4 - remainder, withPad: "=", startingAt: 0)
+            }
+            if let tokenData = Data(base64Encoded: base64),
+               let tokenJson = try? JSONSerialization.jsonObject(with: tokenData) as? [String: Any] {
+                print("🔐 [ProfileAPI] JWT token claims:")
+                if let parseUserId = tokenJson["custom:parse_user_id"] as? String {
+                    print("   - custom:parse_user_id: \(parseUserId)")
+                } else {
+                    print("   - custom:parse_user_id: NOT FOUND in token")
+                }
+                if let sub = tokenJson["sub"] as? String {
+                    print("   - sub: \(sub)")
+                }
+            }
+        }
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ [ProfileAPI] Invalid response type")
+            throw NetworkError.invalidResponse("Invalid response")
+        }
+        
+        print("💾 [ProfileAPI] Response status code: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "No error details"
+            print("❌ [ProfileAPI] HTTP \(httpResponse.statusCode) error: \(errorBody.prefix(200))")
+            throw NetworkError.httpError(httpResponse.statusCode, errorBody)
+        }
+        
+        // Log raw response for debugging
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("💾 [ProfileAPI] Raw response: \(responseString.prefix(500))")
+        }
+        
+        let decoder = JSONDecoder()
+        let updateResponse = try decoder.decode(UpdateUserResponse.self, from: data)
+        
+        guard updateResponse.success else {
+            let errorMsg = updateResponse.error ?? "Failed to update profile"
+            print("❌ [ProfileAPI] Update failed: \(errorMsg)")
+            throw NetworkError.invalidResponse(errorMsg)
+        }
+        
+        // Log decoded response
+        print("✅ [ProfileAPI] Successfully updated profile")
+        print("✅ [ProfileAPI] Updated user data:")
+        print("   - userId: \(updateResponse.data.userId)")
+        print("   - username: \(updateResponse.data.username ?? "nil")")
+        print("   - name: \(updateResponse.data.name ?? "nil")")
+        print("   - email: \(updateResponse.data.email ?? "nil")")
+        print("   - bio: \(updateResponse.data.bio ?? "nil")")
+        
+        return updateResponse.data
+    }
+    
+    /// Delete a user account
+    /// - Parameters:
+    ///   - userId: The user ID to delete
+    ///   - reason: Optional reason for deletion
+    /// - Returns: Success status
+    func deleteAccount(userId: String, reason: String) async throws -> Bool {
+        guard let url = URL(string: deleteAccountURL) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        await addAuthHeaders(to: &request)
+        
+        // Add user ID header
+        request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        
+        let body: [String: Any] = [
+            "userId": userId,
+            "reason": reason.isEmpty ? "No reason provided" : reason
+        ]
+        
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("🗑️ [ProfileAPI] Deleting account for userId: \(userId)")
         
         let (data, response) = try await session.data(for: request)
         
@@ -153,19 +302,29 @@ class ProfileAPIService {
             throw NetworkError.invalidResponse("Invalid response")
         }
         
+        print("🗑️ [ProfileAPI] Delete account response status: \(httpResponse.statusCode)")
+        
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorBody = String(data: data, encoding: .utf8) ?? "No error details"
+            print("❌ [ProfileAPI] Delete account failed: HTTP \(httpResponse.statusCode) - \(errorBody)")
             throw NetworkError.httpError(httpResponse.statusCode, errorBody)
         }
         
-        let decoder = JSONDecoder()
-        let updateResponse = try decoder.decode(UpdateUserResponse.self, from: data)
-        
-        guard updateResponse.success else {
-            throw NetworkError.invalidResponse(updateResponse.error ?? "Failed to update profile")
+        // Try to decode response
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("✅ [ProfileAPI] Delete account response: \(responseString.prefix(200))")
         }
         
-        return updateResponse.data
+        // Try to decode as success response
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let success = json["success"] as? Bool {
+            print("✅ [ProfileAPI] Account deleted successfully: \(success)")
+            return success
+        }
+        
+        // If no explicit success field, assume success based on status code
+        print("✅ [ProfileAPI] Account deleted (status \(httpResponse.statusCode))")
+        return true
     }
     
     // MARK: - Follow Status
@@ -189,7 +348,7 @@ class ProfileAPIService {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
         let (data, response) = try await session.data(for: request)
         
@@ -227,7 +386,7 @@ class ProfileAPIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
         let body: [String: Any] = [
             "followerId": followerId,
@@ -269,7 +428,7 @@ class ProfileAPIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST" // Using POST instead of DELETE for body support
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
         let body: [String: Any] = [
             "followerId": followerId,
@@ -329,7 +488,7 @@ class ProfileAPIService {
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
         let (data, response) = try await session.data(for: request)
         
@@ -382,7 +541,7 @@ class ProfileAPIService {
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        addAuthHeaders(to: &request)
+        await addAuthHeaders(to: &request)
         
         let (data, response) = try await session.data(for: request)
         
@@ -437,6 +596,21 @@ struct ProfileAPIUser: Codable {
     let bio: String?
     let createdAt: String?
     let updatedAt: String?
+    let genieSubscriptionTier: String? // Subscription tier from user profile
+    
+    enum CodingKeys: String, CodingKey {
+        case userId
+        case username
+        case name
+        case email
+        case profilePictureUrl
+        case profilePictureAvailable
+        case privacyToggle
+        case bio
+        case createdAt
+        case updatedAt
+        case genieSubscriptionTier
+    }
     
     // Custom decoding to handle missing username field
     init(from decoder: Decoder) throws {
@@ -451,6 +625,7 @@ struct ProfileAPIUser: Codable {
         bio = try container.decodeIfPresent(String.self, forKey: .bio)
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        genieSubscriptionTier = try container.decodeIfPresent(String.self, forKey: .genieSubscriptionTier)
     }
 }
 

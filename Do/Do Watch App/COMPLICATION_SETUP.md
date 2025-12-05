@@ -82,3 +82,7 @@ The complication supports:
 - Data updates are triggered by `DailyBricksService.shared.loadTodayProgress()`
 - The complication fetches data asynchronously when requested by watchOS
 
+
+
+
+

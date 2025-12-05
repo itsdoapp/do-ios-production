@@ -74,34 +74,46 @@ class UserIDResolver {
     
     /// Get user IDs for fetching data (tries Parse first, then Cognito)
     /// This is the recommended method for API calls that need to work with legacy data
-    /// - Parameter userModel: Optional UserModel to extract IDs from
+    /// - Parameter userModel: Optional UserModel to extract IDs from. If provided and NOT the current user, only returns that user's IDs.
     /// - Returns: Array of user IDs to try (in order of preference)
     func getUserIdsForDataFetch(userModel: UserModel? = nil) -> [String] {
         var ids: [String] = []
         
-        // If userModel provided, extract IDs from it
-        if let user = userModel {
-            // Try Parse ID from user model (if it exists in a custom field)
-            // For now, we'll rely on the userID which might be either
+        // If userModel provided, check if it's the current user
+        let isCurrentUser: Bool
+        if let user = userModel, let userId = user.userID, !userId.isEmpty {
+            isCurrentUser = self.isCurrentUser(userId: userId)
             
             // Add the user's ID (could be Parse or Cognito)
-            if let userId = user.userID, !userId.isEmpty {
-                ids.append(userId)
+            ids.append(userId)
+            
+            // If this is NOT the current user, ONLY return this user's IDs
+            // Don't add current user's IDs - we want to fetch THIS user's data, not current user's
+            if !isCurrentUser {
+                print("🆔 [UserIDResolver] User IDs for data fetch (other user): \(ids)")
+                return ids
             }
+        } else {
+            isCurrentUser = true // No userModel means we're fetching current user's data
         }
         
-        // Always add current user's Parse ID first (for legacy data)
-        if let parseUserId = AWSCognitoAuth.shared.getParseUserId(), !parseUserId.isEmpty {
-            if !ids.contains(parseUserId) {
-                ids.insert(parseUserId, at: 0) // Insert at beginning for priority
+        // Only add current user's IDs if:
+        // 1. No userModel provided (fetching current user's data), OR
+        // 2. userModel IS the current user
+        if isCurrentUser {
+            // Always add current user's Parse ID first (for legacy data)
+            if let parseUserId = AWSCognitoAuth.shared.getParseUserId(), !parseUserId.isEmpty {
+                if !ids.contains(parseUserId) {
+                    ids.insert(parseUserId, at: 0) // Insert at beginning for priority
+                }
             }
-        }
-        
-        // Add current user's Cognito ID as fallback
-        if let cognitoUserId = CurrentUserService.shared.userID ?? UserDefaults.standard.string(forKey: "cognito_user_id"),
-           !cognitoUserId.isEmpty {
-            if !ids.contains(cognitoUserId) {
-                ids.append(cognitoUserId)
+            
+            // Add current user's Cognito ID as fallback
+            if let cognitoUserId = CurrentUserService.shared.userID ?? UserDefaults.standard.string(forKey: "cognito_user_id"),
+               !cognitoUserId.isEmpty {
+                if !ids.contains(cognitoUserId) {
+                    ids.append(cognitoUserId)
+                }
             }
         }
         

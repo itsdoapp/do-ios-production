@@ -35,7 +35,14 @@ private struct HikeCacheKeys {
     static let maxRecentPaces = 10
 }
 
-// Note: SplitTime is now defined in TrackingModels.swift to avoid duplication
+// HikeSplitTime - separate type for hiking to avoid conflict with TrackingModels.SplitTime
+// This uses Measurement types which are more appropriate for hiking metrics
+struct HikeSplitTime: Identifiable {
+    var id = UUID()
+    var distance: Measurement<UnitLength>
+    var time: TimeInterval
+    var pace: Measurement<UnitSpeed>
+}
 
 class HikeTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, WorkoutEngineProtocol {
     static let shared = HikeTrackingEngine()
@@ -83,7 +90,7 @@ class HikeTrackingEngine: NSObject, ObservableObject, WCSessionDelegate, Workout
     @Published var performanceIndex: Double = 0
     @Published var environmentalConditions: EnvironmentalConditions = EnvironmentalConditions()
     @Published var paceHistory: [Double] = []
-    @Published var splitTimes: [SplitTime] = []
+    @Published var splitTimes: [HikeSplitTime] = []
     private var recentPaceValues: [Double] = []
     private let maxPaceHistoryCount = 5
     
@@ -479,7 +486,6 @@ enum HikeState: String, CaseIterable {
     case ready = "Ready"
     case inProgress = "In Progress"
     case paused = "Paused"
-    case stopping = "Stopping"
     case completed = "Completed"
     case stopped = "Stopped"
     case error = "Error"
@@ -776,16 +782,16 @@ extension HikeTrackingEngine {
             return
         }
         
-        // Prepare metrics to send
+        // Prepare metrics to send - only send metrics that phone is primary for
         let metricsToSend: [String: Any] = [
-            "distance": distance.value,
-            "elapsedTime": elapsedTime,
-            "heartRate": heartRate,
-            "calories": calories,
-            "cadence": cadence,
-            "elevationGain": elevationGain.value,
-            "elevationLoss": elevationLoss.value,
-            "pace": pace.value
+            "distance": isPrimaryForDistance ? distance.value : 0,
+            "elapsedTime": elapsedTime,  // Always send elapsed time
+            "heartRate": isPrimaryForHeartRate ? heartRate : 0,
+            "calories": isPrimaryForCalories ? calories : 0,
+            "cadence": isPrimaryForCadence ? cadence : 0,
+            "elevationGain": elevationGain.value,  // Always send elevation (phone GPS is better)
+            "elevationLoss": elevationLoss.value,  // Always send elevation
+            "pace": isPrimaryForPace ? pace.value : 0
         ]
         
         let updateData: [String: Any] = [
@@ -857,10 +863,12 @@ extension HikeTrackingEngine {
     // MARK: - Device Coordination
     
     // Establish initial device coordination roles
-    private func establishDeviceCoordination() {
+    func establishDeviceCoordination() {
         guard hikeState != .notStarted && hikeState != .completed else { return }
         
         // Hiking is typically outdoor, but check for indoor mode
+        let wasWatchTracking = isWatchTracking // Remember if watch was tracking before
+        
         if isIndoorMode {
             // For indoor hikes, watch takes precedence for all metrics
             isDashboardMode = true
@@ -879,17 +887,39 @@ extension HikeTrackingEngine {
             // For outdoor hikes, determine based on GPS quality
             isDashboardMode = false
             
+            // If watch was tracking (e.g., we're joining a workout started on watch),
+            // we still want to check if phone has good GPS and can take over
+            let watchStartedWorkout = wasWatchTracking || isJoiningExistingWorkout
+            
             // Check if we have good GPS data
             if hasGoodLocationData {
-                // Phone is primary for GPS-based metrics
+                // Phone is primary for GPS-based metrics (even if watch started the workout)
+                // Phone GPS is more accurate for outdoor distance/pace
                 isPrimaryForDistance = true
                 isPrimaryForPace = true
                 isPrimaryForHeartRate = false // Watch still better for HR
                 isPrimaryForCalories = true   // Phone can calculate calories with distance
                 isPrimaryForCadence = false   // Watch better for cadence
                 
-                print("📱 Outdoor hike with good GPS: Phone primary for distance/pace")
-                print("⌚️ Watch primary for heart rate and cadence")
+                // If watch started the workout, we're now coordinating (not just dashboard)
+                if watchStartedWorkout {
+                    isWatchTracking = false // Phone is now tracking GPS-based metrics
+                    print("📱 Outdoor hike (joined from watch) with good GPS: Phone now primary for distance/pace")
+                    print("⌚️ Watch primary for heart rate and cadence")
+                    
+                    // Re-evaluate GPS quality after a few seconds to ensure it's stable
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                        guard let self = self, self.hikeState.isActive else { return }
+                        // Re-check GPS quality and update coordination if it has degraded
+                        if !self.hasGoodLocationData && self.isPrimaryForDistance {
+                            print("📱 GPS quality degraded - re-establishing device coordination")
+                            self.establishDeviceCoordination()
+                        }
+                    }
+                } else {
+                    print("📱 Outdoor hike with good GPS: Phone primary for distance/pace")
+                    print("⌚️ Watch primary for heart rate and cadence")
+                }
             } else {
                 // Poor GPS quality, let watch take more metrics
                 isPrimaryForDistance = false
@@ -899,7 +929,21 @@ extension HikeTrackingEngine {
                 isPrimaryForCadence = false
                 isWatchTracking = true
                 
-                print("📱 Outdoor hike with poor GPS: Deferring to watch for metrics")
+                if watchStartedWorkout {
+                    print("📱 Outdoor hike (joined from watch) with poor GPS: Watch remains primary for metrics")
+                } else {
+                    print("📱 Outdoor hike with poor GPS: Deferring to watch for metrics")
+                }
+                
+                // Re-evaluate GPS quality after a few seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                    guard let self = self, self.hikeState.isActive else { return }
+                    // If GPS improves, re-establish coordination
+                    if self.hasGoodLocationData && self.isWatchTracking {
+                        print("📱 GPS improved - re-establishing device coordination")
+                        self.establishDeviceCoordination()
+                    }
+                }
             }
         }
         
@@ -1052,10 +1096,8 @@ extension HikeTrackingEngine {
                 "type": "handoffResponse",
                 "accepted": true,
                 "workoutId": workoutId.uuidString
-            ], replyHandler: { response in
-                print("📱 Watch acknowledged handoff response: \(response)")
-            }, errorHandler: { error in
-                print("📱 Error sending handoff response: \(error.localizedDescription)")
+            ], replyHandler: { _ in }, errorHandler: { error in
+                print("❌ [HikeTrackingEngine] Error sending handoff response: \(error.localizedDescription)")
             })
         }
     }
@@ -1087,8 +1129,7 @@ extension HikeTrackingEngine {
     
     private func updateMetricsFromExternalDevices(_ metrics: WorkoutMetrics) {
         let coordinationEngine = DeviceCoordinationEngine.shared
-        // Hikes are always outdoor activities
-        let isIndoor = false
+        let isIndoor = false // Hiking is always outdoor
         
         if let source = coordinationEngine.selectBestDataSource(
             for: .heartRate,
@@ -1144,9 +1185,8 @@ extension HikeTrackingEngine {
         case .preparing, .ready: return .starting
         case .inProgress: return .running
         case .paused: return .paused
-        case .stopping: return .stopping
-        case .stopped: return .stopped
         case .completed: return .completed
+        case .stopped: return .stopped
         case .error: return .stopped
         }
     }
@@ -1157,7 +1197,7 @@ extension HikeTrackingEngine {
         case .starting: return .ready
         case .running: return .inProgress
         case .paused: return .paused
-        case .stopping: return .stopping
+        case .stopping: return .stopped
         case .stopped: return .stopped
         case .completed: return .completed
         }

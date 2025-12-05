@@ -54,6 +54,7 @@ struct movement: Codable, Identifiable {
     var firstSectionSets: [set]?
     var secondSectionSets: [set]?
     var weavedSets: [set]?
+    var templateSets: [set]?
     var videoUrl: String?
     var thumbnailUrl: String?
     
@@ -66,7 +67,7 @@ struct movement: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, movement1Name, movement2Name, isSingle, isTimed
         case category, difficulty, description, equipmentsNeeded, tags
-        case firstSectionSets, secondSectionSets, weavedSets
+        case firstSectionSets, secondSectionSets, weavedSets, templateSets
         case videoUrl, thumbnailUrl
     }
 }

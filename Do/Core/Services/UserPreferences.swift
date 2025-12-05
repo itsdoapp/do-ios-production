@@ -207,10 +207,16 @@ class UserPreferences: ObservableObject {
     }
     
     private func syncToBackend() {
-        guard let userId = try? KeychainManager.shared.get(Constants.Keychain.userId) else { return }
+        // Use UserIDResolver for consistent ID resolution
+        guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
+            print("⚠️ [UserPreferences] No user ID available, skipping backend sync")
+            return
+        }
         
         Task {
             do {
+                print("💾 [UserPreferences] Syncing unit preference to backend: \(useMetricSystem ? "metric" : "imperial")")
+                
                 // Sync logic to backend
                 let fields: [String: Any] = [
                     "units": useMetricSystem ? "metric" : "imperial"
@@ -220,7 +226,7 @@ class UserPreferences: ObservableObject {
                     userId: userId,
                     fields: fields
                 )
-                print("✅ [UserPreferences] Synced to backend")
+                print("✅ [UserPreferences] Successfully synced unit preference to backend")
             } catch {
                 print("❌ [UserPreferences] Failed to sync to backend: \(error)")
             }

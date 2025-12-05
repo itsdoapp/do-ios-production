@@ -96,9 +96,91 @@ struct GymWorkoutView: View {
             } else {
                 requestWorkoutState()
             }
+            
+            // Listen for set updates from phone
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("GymSetCompleted"),
+                object: nil,
+                queue: .main
+            ) { [ self] notification in
+                if let userInfo = notification.userInfo,
+                   let reps = userInfo["reps"] as? Int,
+                   let weight = userInfo["weight"] as? Double {
+                    self.totalReps += reps
+                    self.totalVolume += weight * Double(reps)
+                    self.currentSet += 1
+                }
+            }
+            
+            // Listen for gym workout state updates
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("GymWorkoutStateChanged"),
+                object: nil,
+                queue: .main
+            ) { [ self] notification in
+                if let userInfo = notification.userInfo {
+                    if let elapsed = userInfo["elapsedTime"] as? TimeInterval {
+                        self.elapsedTime = elapsed
+                    }
+                    if let volume = userInfo["totalVolume"] as? Double {
+                        self.totalVolume = volume
+                    }
+                    if let reps = userInfo["totalReps"] as? Int {
+                        self.totalReps = reps
+                    }
+                    if let hr = userInfo["heartRate"] as? Double {
+                        self.heartRate = hr
+                    }
+                    if let movement = userInfo["currentMovement"] as? String {
+                        self.currentMovement = movement
+                    }
+                }
+            }
+            
+            // Listen for sets updates from phone
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("GymSetsUpdate"),
+                object: nil,
+                queue: .main
+            ) { [self] notification in
+                if let userInfo = notification.userInfo {
+                    if let volume = userInfo["totalVolume"] as? Double {
+                        self.totalVolume = volume
+                    }
+                    if let reps = userInfo["totalReps"] as? Int {
+                        self.totalReps = reps
+                    }
+                }
+            }
+            
+            // Listen for real-time metrics updates
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("GymMetricsUpdate"),
+                object: nil,
+                queue: .main
+            ) { [self] notification in
+                if let userInfo = notification.userInfo {
+                    if let elapsed = userInfo["elapsedTime"] as? TimeInterval {
+                        self.elapsedTime = elapsed
+                    }
+                    if let volume = userInfo["totalVolume"] as? Double {
+                        self.totalVolume = volume
+                    }
+                    if let reps = userInfo["totalReps"] as? Int {
+                        self.totalReps = reps
+                    }
+                    if let hr = userInfo["heartRate"] as? Double {
+                        self.heartRate = hr
+                    }
+                }
+            }
         }
         .onDisappear {
             stopTimer()
+            NotificationCenter.default.removeObserver(self, name: NSNotification.Name("GymSetCompleted"), object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSNotification.Name("GymWorkoutStateChanged"), object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSNotification.Name("GymSetsUpdate"), object: nil)
+            NotificationCenter.default.removeObserver(self, name: NSNotification.Name("GymMetricsUpdate"), object: nil)
         }
     }
     
@@ -240,8 +322,8 @@ struct GymWorkoutView: View {
             sessionName = "Open Training"
         }
         
-        workoutCoordinator.startWorkout(type: .gym, isOpenTraining: isOpenTraining)
-        healthKitManager.startWorkout(type: .gym) // Gym workouts are always indoor
+        workoutCoordinator.startWorkout(type: WorkoutType.gym)
+        healthKitManager.startWorkout(type: WorkoutType.gym) // Gym workouts are always indoor
         isTracking = true
         startTimer()
         
@@ -314,8 +396,11 @@ struct GymWorkoutView: View {
     private func saveSet() {
         let setData: [String: Any] = [
             "type": "gymSetCompleted",
+            "movementId": currentMovement ?? "openTraining",
+            "movementName": currentMovement ?? "Open Training",
             "reps": setReps,
             "weight": setWeight,
+            "duration": 0, // For rep-based sets
             "timestamp": Date().timeIntervalSince1970
         ]
         

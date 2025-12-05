@@ -56,16 +56,18 @@ struct GhostPacerView: View {
             .frame(height: 6)
             
             // Status text
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 Image(systemName: isAhead ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: 8))
                     .foregroundColor(isAhead ? .green : .red)
                 
                 Text(isAhead ? "AHEAD" : "BEHIND")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 8, weight: .bold))
                     .foregroundColor(isAhead ? .green : .red)
             }
         }
     }
 }
+
+
 
