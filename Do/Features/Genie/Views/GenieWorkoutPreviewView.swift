@@ -468,6 +468,7 @@ struct GenieWorkoutPreviewView: View {
             equipmentsNeeded: workoutAction.equipmentNeeded,
             description: workoutAction.description,
             tags: workoutAction.tags,
+            templateSets: workoutAction.templateSets ?? [],
             firstSectionSets: workoutAction.firstSectionSets ?? [],
             secondSectionSets: workoutAction.secondSectionSets ?? [],
             weavedSets: workoutAction.weavedSets ?? []
@@ -531,6 +532,9 @@ struct GenieWorkoutPreviewView: View {
                 }
                 if let weavedSets = movement.weavedSets {
                     movementDict["weavedSets"] = weavedSets
+                }
+                if let templateSets = movement.templateSets {
+                    movementDict["templateSets"] = templateSets
                 }
                 
                 movementsArray.append(movementDict)

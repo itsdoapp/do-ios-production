@@ -152,18 +152,42 @@ extension ModernGymTrackerViewController: WCSessionDelegate {
     }
     
     private func handleSetFromWatch(_ message: [String: Any]) {
-        if let movementId = message["movementId"] as? String,
-           let reps = message["reps"] as? Int,
+        if let reps = message["reps"] as? Int,
            let weight = message["weight"] as? Double {
             
+            let movementId = message["movementId"] as? String
+            let duration = message["duration"] as? TimeInterval
+            
             // Find the movement in current session
-            if let movement = gymTracker.currentSession?.movementsInSession?.first(where: { $0.id == movementId }) {
-                var set = set()
-                set.reps = reps
-                set.weight = weight
-                set.completed = true
-                
-                gymTracker.completeSet(movement: movement, set: set, weight: weight, reps: reps, duration: nil)
+            var foundMovement: movement?
+            if let movementId = movementId, movementId != "openTraining" {
+                foundMovement = gymTracker.currentSession?.movementsInSession?.first(where: { $0.id == movementId })
+            } else {
+                // Open training - use current movement or create a generic one
+                foundMovement = gymTracker.currentMovement ?? {
+                    var openMovement = movement()
+                    openMovement.id = "openTraining"
+                    openMovement.movement1Name = "Open Training"
+                    return openMovement
+                }()
+            }
+            
+            guard let movement = foundMovement else { return }
+            
+            var set = set()
+            set.id = UUID().uuidString
+            set.reps = reps
+            set.weight = weight
+            set.completed = true
+            if let duration = duration {
+                set.duration = Int(duration)
+            }
+            
+            gymTracker.completeSet(movement: movement, set: set, weight: weight, reps: reps, duration: duration)
+            
+            // Update current movement if needed
+            if gymTracker.currentMovement?.id != movement.id {
+                gymTracker.updateCurrentMovement(movement)
             }
         }
     }

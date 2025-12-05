@@ -19,6 +19,10 @@ class FeedAPIService {
     private let createPostURL: String = "https://kw72ntz5qh3n72mygfvyf6olwe0jbmxs.lambda-url.us-east-1.on.aws/"
     private let userPostsURL: String = "https://wlgisqyvbaz7qysm36mnbpdje40bnrmk.lambda-url.us-east-1.on.aws/"
     private let generateDeepLinkURL: String = "https://bravfrj7zpd7txwopgwggzmbu40xnbqw.lambda-url.us-east-1.on.aws/"
+    private let deletePostURL: String = "https://tjilaukuoklivjpydwedxerir40tcjdq.lambda-url.us-east-1.on.aws/"
+    private let hidePostURL: String = "https://molc6s6clluocc4zwgawot2y3i0fsxaw.lambda-url.us-east-1.on.aws/"
+    private let archivePostURL: String = "https://si3whdyhtdlnifsz3hemcijsge0xgtoy.lambda-url.us-east-1.on.aws/"
+    private let reportPostURL: String = "https://eubskipl7qy3euw5eshc5rac4m0hmxee.lambda-url.us-east-1.on.aws/"
     private let session: URLSession
     
     private init() {
@@ -344,6 +348,267 @@ class FeedAPIService {
                 completion(.failure(error))
             }
         }.resume()
+    }
+    
+    // MARK: - Delete Post
+    
+    /// Delete a post from the backend
+    /// - Parameters:
+    ///   - postId: The post ID to delete
+    ///   - userId: The user ID who owns the post (for authorization)
+    /// - Returns: Success status
+    func deletePost(postId: String, userId: String) async throws -> Bool {
+        guard let url = URL(string: deletePostURL) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST" // Some APIs use POST for delete with body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Add authentication
+        if let token = KeychainManager.shared.get(Constants.Keychain.idToken) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        // Add user ID header
+        request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        
+        let body: [String: Any] = [
+            "postId": postId,
+            "userId": userId
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("🗑️ [FeedAPI] Deleting post: \(postId) for user: \(userId)")
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NetworkError.invalidResponse("Invalid response")
+        }
+        
+        print("🗑️ [FeedAPI] Delete response status: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "No error details"
+            print("❌ [FeedAPI] Delete post failed: HTTP \(httpResponse.statusCode) - \(errorBody)")
+            throw NetworkError.httpError(httpResponse.statusCode, errorBody)
+        }
+        
+        // Try to decode response
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("✅ [FeedAPI] Delete response: \(responseString.prefix(200))")
+        }
+        
+        // Try to decode as success response
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let success = json["success"] as? Bool {
+            print("✅ [FeedAPI] Post deleted successfully: \(success)")
+            return success
+        }
+        
+        // If no explicit success field, assume success based on status code
+        print("✅ [FeedAPI] Post deleted (status \(httpResponse.statusCode))")
+        return true
+    }
+    
+    // MARK: - Hide Post
+    
+    /// Hide a post from the feed (removes it from view but doesn't delete)
+    /// - Parameters:
+    ///   - postId: The post ID to hide
+    ///   - userId: The user ID who is hiding the post
+    /// - Returns: Success status
+    func hidePost(postId: String, userId: String) async throws -> Bool {
+        guard let url = URL(string: hidePostURL) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Add authentication
+        if let token = KeychainManager.shared.get(Constants.Keychain.idToken) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        // Add user ID header
+        request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        
+        let body: [String: Any] = [
+            "postId": postId,
+            "userId": userId
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("👁️ [FeedAPI] Hiding post: \(postId) for user: \(userId)")
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NetworkError.invalidResponse("Invalid response")
+        }
+        
+        print("👁️ [FeedAPI] Hide response status: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "No error details"
+            print("❌ [FeedAPI] Hide post failed: HTTP \(httpResponse.statusCode) - \(errorBody)")
+            throw NetworkError.httpError(httpResponse.statusCode, errorBody)
+        }
+        
+        // Try to decode response
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("✅ [FeedAPI] Hide response: \(responseString.prefix(200))")
+        }
+        
+        // Try to decode as success response
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let success = json["success"] as? Bool {
+            print("✅ [FeedAPI] Post hidden successfully: \(success)")
+            return success
+        }
+        
+        // If no explicit success field, assume success based on status code
+        print("✅ [FeedAPI] Post hidden (status \(httpResponse.statusCode))")
+        return true
+    }
+    
+    // MARK: - Archive Post
+    
+    /// Archive a post (removes it from feed but keeps it in user's archive)
+    /// - Parameters:
+    ///   - postId: The post ID to archive
+    ///   - userId: The user ID who owns the post
+    /// - Returns: Success status
+    func archivePost(postId: String, userId: String) async throws -> Bool {
+        guard let url = URL(string: archivePostURL) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Add authentication
+        if let token = KeychainManager.shared.get(Constants.Keychain.idToken) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        // Add user ID header
+        request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        
+        let body: [String: Any] = [
+            "postId": postId,
+            "userId": userId
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("📦 [FeedAPI] Archiving post: \(postId) for user: \(userId)")
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NetworkError.invalidResponse("Invalid response")
+        }
+        
+        print("📦 [FeedAPI] Archive response status: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "No error details"
+            print("❌ [FeedAPI] Archive post failed: HTTP \(httpResponse.statusCode) - \(errorBody)")
+            throw NetworkError.httpError(httpResponse.statusCode, errorBody)
+        }
+        
+        // Try to decode response
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("✅ [FeedAPI] Archive response: \(responseString.prefix(200))")
+        }
+        
+        // Try to decode as success response
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let success = json["success"] as? Bool {
+            print("✅ [FeedAPI] Post archived successfully: \(success)")
+            return success
+        }
+        
+        // If no explicit success field, assume success based on status code
+        print("✅ [FeedAPI] Post archived (status \(httpResponse.statusCode))")
+        return true
+    }
+    
+    // MARK: - Report Post
+    
+    /// Report a post for inappropriate content
+    /// - Parameters:
+    ///   - postId: The post ID to report
+    ///   - userId: The user ID who is reporting the post
+    ///   - reason: Optional reason for reporting
+    /// - Returns: Success status
+    func reportPost(postId: String, userId: String, reason: String? = nil) async throws -> Bool {
+        guard let url = URL(string: reportPostURL) else {
+            throw NetworkError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Add authentication
+        if let token = KeychainManager.shared.get(Constants.Keychain.idToken) {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        // Add user ID header
+        request.setValue(userId, forHTTPHeaderField: "X-User-Id")
+        
+        var body: [String: Any] = [
+            "postId": postId,
+            "userId": userId
+        ]
+        
+        if let reason = reason, !reason.isEmpty {
+            body["reason"] = reason
+        }
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("🚨 [FeedAPI] Reporting post: \(postId) for user: \(userId), reason: \(reason ?? "No reason provided")")
+        
+        let (data, response) = try await session.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NetworkError.invalidResponse("Invalid response")
+        }
+        
+        print("🚨 [FeedAPI] Report response status: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "No error details"
+            print("❌ [FeedAPI] Report post failed: HTTP \(httpResponse.statusCode) - \(errorBody)")
+            throw NetworkError.httpError(httpResponse.statusCode, errorBody)
+        }
+        
+        // Try to decode response
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("✅ [FeedAPI] Report response: \(responseString.prefix(200))")
+        }
+        
+        // Try to decode as success response
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let success = json["success"] as? Bool {
+            print("✅ [FeedAPI] Post reported successfully: \(success)")
+            return success
+        }
+        
+        // If no explicit success field, assume success based on status code
+        print("✅ [FeedAPI] Post reported (status \(httpResponse.statusCode))")
+        return true
     }
     
     // MARK: - Helper Methods

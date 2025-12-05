@@ -97,6 +97,23 @@ class FeedCacheManager {
         return nil
     }
     
+    /// Remove a post from cache
+    func removePost(postId: String) {
+        // Remove from memory cache
+        memoryCache.removeValue(forKey: postId)
+        if let index = memoryCacheOrder.firstIndex(of: postId) {
+            memoryCacheOrder.remove(at: index)
+        }
+        
+        // Remove from disk cache
+        if var posts = loadFromDisk() {
+            posts.removeAll { $0.objectId == postId }
+            saveToDisk(posts: posts)
+        }
+        
+        print("🗑️ [Cache] Removed post \(postId) from cache")
+    }
+    
     // MARK: - Interaction Caching
     
     /// Save interactions to cache

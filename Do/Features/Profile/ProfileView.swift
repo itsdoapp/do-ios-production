@@ -17,6 +17,7 @@ struct ProfileView: View {
     @StateObject private var authService = AuthService.shared
     var showsDismissButton: Bool = false
     var animateAppear: Bool = true
+    var onDismiss: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var selectedTab = 0
     @State private var selectedPost: Post?
@@ -27,13 +28,14 @@ struct ProfileView: View {
     // Keep at 0 to keep hero at the very top
     private let headerTopOffset: CGFloat = 0
     
-    init(showsDismissButton: Bool = false, animateAppear: Bool = true) {
-        // Initialize with current user immediately
-        let currentUser = CurrentUserService.shared.user
-        print("👤 [ProfileView] init() - CurrentUserService userID: \(currentUser.userID ?? "nil")")
-        _viewModel = StateObject(wrappedValue: ProfileViewModel(user: currentUser))
+    init(user: UserModel? = nil, showsDismissButton: Bool = false, animateAppear: Bool = true, onDismiss: (() -> Void)? = nil) {
+        // Initialize with provided user or current user
+        let userToDisplay = user ?? CurrentUserService.shared.user
+        print("👤 [ProfileView] init() - userID: \(userToDisplay.userID ?? "nil"), userName: \(userToDisplay.userName ?? "nil"), isCurrentUser: \(UserIDResolver.shared.isCurrentUser(userId: userToDisplay.userID ?? ""))")
+        _viewModel = StateObject(wrappedValue: ProfileViewModel(user: userToDisplay))
         self.showsDismissButton = showsDismissButton
         self.animateAppear = animateAppear
+        self.onDismiss = onDismiss
     }
     
     // Animation states
@@ -202,6 +204,11 @@ struct ProfileView: View {
                         if !viewModel.name.isEmpty || !viewModel.username.isEmpty || viewModel.hasBeenLoaded {
                             VStack(spacing: 0) {
                                 heroSection(geometry: geometry)
+                                
+                                // Unified profile section (image, name, username, bio) below hero
+                                unifiedProfileSection
+                                    .padding(.top, -50) // Overlap slightly with hero for seamless transition
+                                
                                 // Hide in-flow stats when sticky header is active
                                 if segmentedTop > geometry.safeAreaInsets.top + 1 {
                                     statsSection
@@ -305,7 +312,15 @@ struct ProfileView: View {
                 if showsDismissButton {
                     VStack {
                         HStack {
-                            Button(action: { dismiss() }) {
+                            Button(action: { 
+                                // Use callback if provided (for UIKit modal presentation)
+                                if let onDismiss = onDismiss {
+                                    onDismiss()
+                                } else {
+                                    // Fallback to SwiftUI dismiss
+                                    dismiss()
+                                }
+                            }) {
                                 Image(systemName: "chevron.left")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.white)
@@ -354,7 +369,7 @@ struct ProfileView: View {
                             startPoint: .top,
                             endPoint: .bottom
                         )
-                        .frame(height: geometry.safeAreaInsets.top + 100) // Increased from +80 to +100
+                        .frame(height: geometry.safeAreaInsets.top + 130) // Increased to accommodate bio
                         .frame(maxWidth: .infinity)
                         .shadow(color: Color.black.opacity(0.3), radius: 8, x: 0, y: 4)
                         .zIndex(999)
@@ -362,7 +377,7 @@ struct ProfileView: View {
                         // Header content
                         VStack(spacing: 0) {
                             floatingHeader
-                                .padding(.top, geometry.safeAreaInsets.top + 28) // Increased from +16 to +28
+                                .padding(.top, geometry.safeAreaInsets.top + 24) // Adjusted for better spacing
                             Spacer(minLength: 0)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -382,22 +397,75 @@ struct ProfileView: View {
         // Ensure nothing (including parent container/nav) adds a top inset
         .ignoresSafeArea(.container, edges: .top)
         .onAppear {
-            // Update view model with current user when view appears
-            let freshUser = CurrentUserService.shared.user
-            print("👤 [ProfileView] onAppear - updating user from CurrentUserService")
-            print("👤 [ProfileView] CurrentUserService userID: \(freshUser.userID ?? "nil")")
-            print("👤 [ProfileView] CurrentUserService userName: \(freshUser.userName ?? "nil")")
+            print("👤 [ProfileView] onAppear - isCurrentUserProfile: \(viewModel.isCurrentUserProfile), userID: \(viewModel.user.userID ?? "nil")")
             
-            // Update the view model with current user
-            viewModel.updateUser(freshUser)
+            // CRITICAL: Only update with current user data if this is the current user's profile
+            // For other users, NEVER update with current user data - this would show wrong user's posts/followers
+            if viewModel.isCurrentUserProfile {
+                let freshUser = CurrentUserService.shared.user
+                print("👤 [ProfileView] onAppear - updating current user from CurrentUserService")
+                print("👤 [ProfileView] CurrentUserService userID: \(freshUser.userID ?? "nil")")
+                print("👤 [ProfileView] CurrentUserService userName: \(freshUser.userName ?? "nil")")
+                print("👤 [ProfileView] CurrentUserService bio: \(freshUser.bio ?? "nil")")
+                
+                // Update the view model with fresh user data
+                viewModel.updateUser(freshUser)
+            } else {
+                print("👤 [ProfileView] onAppear - viewing OTHER user's profile")
+                print("   - userID: \(viewModel.user.userID ?? "nil")")
+                print("   - userName: \(viewModel.user.userName ?? "nil")")
+                print("   - NOT calling updateUser() to prevent showing wrong user's posts/followers")
+                print("   - ProfileViewModel will use profileUserId internally to load correct data")
+                // CRITICAL: For other users, NEVER call updateUser() with current user data
+                // The ProfileViewModel's profileUserId ensures we always load the correct user's data
+            }
             
-            // PROGRESSIVE LOADING: Only load if not already loaded or loading
-            // Profile header is already showing (from optimistic init), this just refreshes data
-            if !viewModel.hasBeenLoaded && !viewModel.isLoadingProfile && !viewModel.isLoadingInBackground {
-                print("🔄 ProfileView.onAppear: Loading user data (header already visible)")
+            // PROGRESSIVE LOADING: Load data if not already loaded
+            // This works for both current user and other users
+            // The ProfileViewModel uses profileUserId internally to ensure correct data
+            // For current user, also reload if posts haven't been fetched yet (in case profile was incorrectly identified before)
+            let shouldLoad = !viewModel.hasBeenLoaded || (viewModel.isCurrentUserProfile && !viewModel.hasFetchedPosts)
+            if shouldLoad && !viewModel.isLoadingProfile && !viewModel.isLoadingInBackground {
+                print("🔄 ProfileView.onAppear: Loading user data (hasBeenLoaded: \(viewModel.hasBeenLoaded), hasFetchedPosts: \(viewModel.hasFetchedPosts), isCurrentUser: \(viewModel.isCurrentUserProfile))")
                 viewModel.loadUserData()
             } else {
-                print("⏭️ ProfileView.onAppear: Skipping load (hasBeenLoaded: \(viewModel.hasBeenLoaded), isLoadingProfile: \(viewModel.isLoadingProfile), isLoadingInBackground: \(viewModel.isLoadingInBackground))")
+                print("⏭️ ProfileView.onAppear: Skipping load (hasBeenLoaded: \(viewModel.hasBeenLoaded), hasFetchedPosts: \(viewModel.hasFetchedPosts), isLoadingProfile: \(viewModel.isLoadingProfile), isLoadingInBackground: \(viewModel.isLoadingInBackground))")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CurrentUserUpdated"))) { _ in
+            // When user data is updated (e.g., from settings), refresh the profile view
+            if viewModel.isCurrentUserProfile {
+                print("🔄 [ProfileView] Received CurrentUserUpdated - refreshing profile data")
+                let freshUser = CurrentUserService.shared.user
+                viewModel.updateUser(freshUser)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DeletePost"))) { notification in
+            if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                Task {
+                    await viewModel.deletePost(postId: postId)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("HidePost"))) { notification in
+            if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                Task {
+                    await viewModel.hidePost(postId: postId)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ArchivePost"))) { notification in
+            if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                Task {
+                    await viewModel.archivePost(postId: postId)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ReportPost"))) { notification in
+            if let postId = notification.userInfo?["postId"] as? String, !postId.isEmpty {
+                Task {
+                    await viewModel.reportPost(postId: postId)
+                }
             }
         }
         .task {
@@ -667,7 +735,7 @@ struct ProfileView: View {
     
     // MARK: - Floating Header
     private var floatingHeader: some View {
-        VStack(spacing: 12) { // Increased from 8 to 12
+        VStack(spacing: 10) { // Adjusted spacing for bio
             HStack(spacing: 16) { // Increased from 12 to 16
                 // Mini avatar without border
                 if let profileImage = viewModel.profileImage {
@@ -684,9 +752,9 @@ struct ProfileView: View {
                 }
 
                 // Name & username with action button
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) { // Increased spacing to accommodate bio
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 3) { // Increased spacing for bio
                             Text(viewModel.name)
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundColor(.white)
@@ -695,6 +763,18 @@ struct ProfileView: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundColor(Color(UIColor(red: 247/255, green: 147/255, blue: 31/255, alpha: 1.0)))
                                 .lineLimit(1)
+                            
+                            // Condensed bio in floating header - single line, truncated with padding
+                            if let bio = viewModel.user.bio, !bio.isEmpty {
+                                // Limit bio length to prevent spacing issues (max 70 characters)
+                                let truncatedBio = bio.count > 70 ? String(bio.prefix(67)) + "..." : bio
+                                Text(truncatedBio)
+                                    .font(.system(size: 11, weight: .regular))
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .lineLimit(1)
+                                    .padding(.top, 4)
+                                    .padding(.trailing, 8) // Add horizontal padding
+                            }
                         }
                         
                         Spacer()
@@ -744,11 +824,19 @@ struct ProfileView: View {
                         }
                         .buttonStyle(.plain)
 
-                        // Followers
+                        // Followers - show stats, but only make clickable if:
+                        // 1. Current user's profile, OR
+                        // 2. Public profile, OR
+                        // 3. Private profile but following
+                        let canViewFollowers = viewModel.isCurrentUserProfile || 
+                                               !(viewModel.user.privacyToggle ?? false) || 
+                                               viewModel.isFollowing
                         Button {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { }
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            viewModel.showFollowersList()
+                            if canViewFollowers {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { }
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                viewModel.showFollowersList()
+                            }
                         } label: {
                             VStack(spacing: 2) {
                                 Text("Followers")
@@ -761,10 +849,17 @@ struct ProfileView: View {
                             .frame(minWidth: 56)
                         }
                         .buttonStyle(.plain)
+                        .disabled(!canViewFollowers)
 
-                        // Following - always show stats, but only make clickable for current user
+                        // Following - show stats, but only make clickable if:
+                        // 1. Current user's profile, OR
+                        // 2. Public profile, OR
+                        // 3. Private profile but following
+                        let canViewFollowing = viewModel.isCurrentUserProfile || 
+                                              !(viewModel.user.privacyToggle ?? false) || 
+                                              viewModel.isFollowing
                         Button {
-                            if viewModel.isCurrentUserProfile {
+                            if canViewFollowing {
                                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { }
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 viewModel.showFollowingList()
@@ -781,7 +876,7 @@ struct ProfileView: View {
                             .frame(minWidth: 56)
                         }
                         .buttonStyle(.plain)
-                        .disabled(!viewModel.isCurrentUserProfile)
+                        .disabled(!canViewFollowing)
                     }
                 }
 
@@ -831,48 +926,167 @@ struct ProfileView: View {
         )
     }
     
-    // MARK: - Hero Section
+    // MARK: - Hero Section (Background Only)
     private func heroSection(geometry: GeometryProxy) -> some View {
         ZStack(alignment: .bottom) {
             // Reserve space for the hero background image drawn behind the scroll content
-            Color.clear.frame(height: 300)
-
-            // Profile content
-            VStack(spacing: 12) {
-                // Profile image
+            Color.clear.frame(height: 280)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .ignoresSafeArea(edges: .top)
+    }
+    
+    // MARK: - Unified Profile Section (Image, Name, Username, Bio)
+    private var unifiedProfileSection: some View {
+        VStack(spacing: 0) {
+            // Profile Image (on top - minimal background area)
+            Group {
                 if let profileImage = viewModel.profileImage {
                     Image(uiImage: profileImage)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(width: 110, height: 110)
+                        .frame(width: 100, height: 100)
                         .clipShape(Circle())
-                        .shadow(color: Color.black.opacity(0.2), radius: 8)
+                        .shadow(color: Color.black.opacity(0.5), radius: 20, x: 0, y: 8)
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [
+                                            Color.white.opacity(0.4),
+                                            Color.white.opacity(0.15)
+                                        ]),
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    lineWidth: 2.5
+                                )
+                        )
                 } else {
                     Image(systemName: "person.circle.fill")
                         .resizable()
-                        .frame(width: 110, height: 110)
-                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 100, height: 100)
+                        .foregroundColor(.white.opacity(0.7))
+                        .shadow(color: Color.black.opacity(0.5), radius: 20, x: 0, y: 8)
                 }
-                
-                // Name and username
-                VStack(spacing: 4) {
+            }
+            .padding(.top, 20)
+            .padding(.bottom, 20)
+            .zIndex(1) // Keep image above gradient background
+            
+            // Name
+            if !viewModel.name.isEmpty {
                 Text(viewModel.name)
-                                .font(.system(size: 24, weight: .bold))
-                                .foregroundColor(.white)
-                
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+            }
+            
+            // Username
+            if !viewModel.username.isEmpty {
                 Text("@\(viewModel.username.lowercased())")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Color.brandOrange)
-                    }
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Color.brandOrange)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, viewModel.user.bio != nil && !viewModel.user.bio!.isEmpty ? 14 : 0)
             }
-            .padding(.bottom, 16)
-            // Translate and fade hero content like Spotify header
-            .modifier(HeroContentScrollEffect(scrollOffset: scrollOffset))
+            
+            // Bio - seamlessly integrated below username
+            if let bio = viewModel.user.bio, !bio.isEmpty {
+                VStack(spacing: 0) {
+                    // Divider line with gradient
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    Color.white.opacity(0.0),
+                                    Color.white.opacity(0.25),
+                                    Color.white.opacity(0.0)
+                                ]),
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(height: 1)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 6)
+                    
+                    Text(bio)
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundColor(.white.opacity(0.95))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(6)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 16)
+                        .padding(.bottom, 20)
+                }
+            } else {
+                // Add bottom padding if no bio
+                Color.clear.frame(height: 20)
             }
-            // Fill container and pin to top so there is zero top offset
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .ignoresSafeArea(edges: .top)
         }
+        .background(
+            // Seamless alpha phase-out gradient - transparent at top, darker at bottom
+            // Matches the followers section color scheme with darker bottom
+            RoundedRectangle(cornerRadius: 24)
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            // Top area (around profile image) - almost transparent
+                            .init(color: Color(UIColor(red: 0.08, green: 0.12, blue: 0.28, alpha: 0.0)), location: 0.0),
+                            .init(color: Color(UIColor(red: 0.08, green: 0.12, blue: 0.28, alpha: 0.2)), location: 0.25),
+                            .init(color: Color(UIColor(red: 0.08, green: 0.12, blue: 0.28, alpha: 0.6)), location: 0.5),
+                            .init(color: Color(UIColor(red: 0.08, green: 0.12, blue: 0.28, alpha: 0.9)), location: 0.75),
+                            // Bottom area (name, username, bio) - fully opaque like followers view
+                            .init(color: Color(UIColor(red: 0.08, green: 0.12, blue: 0.28, alpha: 1.0)), location: 1.0)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .background(
+                    // Additional depth with darker gradient matching followers view
+                    RoundedRectangle(cornerRadius: 24)
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(stops: [
+                                    .init(color: Color(UIColor(red: 0.06, green: 0.10, blue: 0.24, alpha: 0.0)), location: 0.0),
+                                    .init(color: Color(UIColor(red: 0.06, green: 0.10, blue: 0.24, alpha: 0.4)), location: 0.5),
+                                    // Bottom matches followers view - fully opaque darker blue
+                                    .init(color: Color(UIColor(red: 0.06, green: 0.10, blue: 0.24, alpha: 1.0)), location: 1.0)
+                                ]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                )
+        )
+        .overlay(
+            // Subtle border that also phases in
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: Color.white.opacity(0.0), location: 0.0),
+                            .init(color: Color.white.opacity(0.1), location: 0.4),
+                            .init(color: Color.white.opacity(0.25), location: 0.7),
+                            .init(color: Color.white.opacity(0.3), location: 1.0)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: Color.black.opacity(0.4), radius: 24, x: 0, y: 10)
+        .padding(.horizontal, 20)
+        .fixedSize(horizontal: false, vertical: false) // Prevent collapsing
+    }
     
 
     // MARK: - Hero Background (Top-Anchored)
@@ -989,7 +1203,23 @@ struct ProfileView: View {
                 ("person.2.fill", "Followers", viewModel.followerCount),
                 ("person.2.circle.fill", "Following", viewModel.followingCount)
             ], id: \.0) { icon, label, count in
-                    Button(action: {
+                // Check if user can view followers/following lists
+                let canViewList: Bool = {
+                    switch label {
+                    case "Posts":
+                        return true // Always allow viewing posts tab
+                    case "Followers", "Following":
+                        // Can view if: current user OR public profile OR private but following
+                        return viewModel.isCurrentUserProfile || 
+                               !(viewModel.user.privacyToggle ?? false) || 
+                               viewModel.isFollowing
+                    default:
+                        return true
+                    }
+                }()
+                
+                Button(action: {
+                    guard canViewList else { return }
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                         switch label {
                         case "Posts": selectedTab = 0
@@ -1015,6 +1245,7 @@ struct ProfileView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(StatButtonStyle())
+                .disabled(!canViewList)
                 
                 if label != "Following" {
                     Divider()
@@ -1294,7 +1525,8 @@ struct ProfileView: View {
                             onTap: { selectedPost = thought },
                             onShare: { handleShare(post: thought) }
                         )
-                        .padding(.horizontal, 16)
+                        // No horizontal padding - PostThoughtsCell already has internal padding
+                        // This makes thoughts wider, matching post detail view
                     }
                     
                     // Show subtle loading indicator when loading more thoughts
@@ -1309,8 +1541,8 @@ struct ProfileView: View {
                         .padding(.vertical, 20)
                     }
                 }
-                .padding(.horizontal)
                 .padding(.vertical, 12)
+                // No horizontal padding - thoughts should be full width like in post detail
             }
         }
     }

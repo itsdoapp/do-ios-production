@@ -68,3 +68,6 @@ Or create a build script that conditionally includes it only for Release/Archive
 The watch app is now **completely independent** from the iOS app during regular builds and runs. This matches the DoIOSWatch setup where both apps can run simultaneously without interfering with each other.
 
 
+
+
+

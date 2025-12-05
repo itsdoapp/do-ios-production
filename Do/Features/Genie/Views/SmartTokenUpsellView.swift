@@ -18,6 +18,7 @@ struct SmartTokenUpsellView: View {
     @Environment(\.dismiss) var dismiss
     @State private var paymentSheet: StripePaymentSheet.PaymentSheet?
     @State private var subscriptionPaymentSheet: StripePaymentSheet.PaymentSheet?
+    @State private var currentSetupIntentClientSecret: String?
     @State private var isProcessing = false
     @State private var errorMessage = ""
     @State private var showError = false
@@ -117,7 +118,11 @@ struct SmartTokenUpsellView: View {
         }
         .task {
             await loadCurrentSubscriptionTier()
-            await reloadBalance()
+            // Don't reload balance on appear - use the balance from error response
+            // The error response has the accurate balance that the query endpoint sees
+            // Reloading would overwrite it with potentially stale data from balance endpoint
+            // Balance will be reloaded after purchase if needed
+            print("💰 [Upsell] Using balance from error response: \(currentBalance) tokens")
             withAnimation(.easeOut(duration: 0.6).delay(0.2)) {
                 animateCards = true
             }
@@ -497,7 +502,7 @@ struct SmartTokenUpsellView: View {
                 appearance.cornerRadius = 12.0
                 configuration.appearance = appearance
                 
-                // Enable Apple Pay
+                // Enable Apple Pay with proper configuration
                 let applePayConfig = StripePaymentSheet.PaymentSheet.ApplePayConfiguration(
                     merchantId: "merchant.com.doapp",
                     merchantCountryCode: "US",
@@ -505,16 +510,27 @@ struct SmartTokenUpsellView: View {
                 )
                 configuration.applePay = applePayConfig
                 
+                // Ensure Apple Pay is enabled
+                print("✅ [Upsell] Apple Pay configured: merchantId=merchant.com.doapp, countryCode=US")
+                
                 await MainActor.run {
+                    print("✅ [Upsell] Creating PaymentSheet with client secret: \(paymentIntent.clientSecret.prefix(30))...")
                     paymentSheet = StripePaymentSheet.PaymentSheet(
                         paymentIntentClientSecret: paymentIntent.clientSecret,
                         configuration: configuration
                     )
                     isProcessing = false
-                    print("✅ [Upsell] PaymentSheet created, presenting...")
+                    print("✅ [Upsell] PaymentSheet created with Apple Pay support")
+                    print("✅ [Upsell] PaymentSheet object: \(paymentSheet != nil ? "created" : "nil")")
+                    print("✅ [Upsell] About to present PaymentSheet...")
                     
-                    // Present PaymentSheet directly
-                    presentPaymentSheet()
+                    // Small delay to ensure UI is ready, then present
+                    Task {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+                        await MainActor.run {
+                            presentPaymentSheet()
+                        }
+                    }
                 }
             } catch {
                 print("❌ [Upsell] Error creating payment intent: \(error)")
@@ -573,7 +589,7 @@ struct SmartTokenUpsellView: View {
                 appearance.cornerRadius = 12.0
                 configuration.appearance = appearance
                 
-                // Enable Apple Pay
+                // Enable Apple Pay with proper configuration
                 let applePayConfig = StripePaymentSheet.PaymentSheet.ApplePayConfiguration(
                     merchantId: "merchant.com.doapp",
                     merchantCountryCode: "US",
@@ -581,13 +597,19 @@ struct SmartTokenUpsellView: View {
                 )
                 configuration.applePay = applePayConfig
                 
+                // Ensure Apple Pay is enabled
+                print("✅ [Upsell] Apple Pay configured for subscription: merchantId=merchant.com.doapp, countryCode=US")
+                
                 await MainActor.run {
+                    // Store setup intent client secret for later retrieval of payment method
+                    currentSetupIntentClientSecret = setupIntentResponse.clientSecret
+                    
                     subscriptionPaymentSheet = StripePaymentSheet.PaymentSheet(
                         setupIntentClientSecret: setupIntentResponse.clientSecret,
                         configuration: configuration
                     )
                     isProcessing = false
-                    print("✅ [Upsell] Subscription PaymentSheet created, presenting...")
+                    print("✅ [Upsell] Subscription PaymentSheet created with Apple Pay support, presenting...")
                     
                     // Present PaymentSheet directly
                     presentSubscriptionPaymentSheet()
@@ -637,13 +659,17 @@ struct SmartTokenUpsellView: View {
     
     private func presentPaymentSheet() {
         guard let paymentSheet = paymentSheet else {
+            print("❌ [Upsell] Payment sheet is nil - cannot present")
             errorMessage = "Payment sheet not loaded"
             showError = true
             return
         }
         
+        print("✅ [Upsell] Payment sheet exists, finding view controller to present from...")
+        
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let rootViewController = scene.windows.first?.rootViewController else {
+            print("❌ [Upsell] Could not find window scene or root view controller")
             errorMessage = "Unable to present payment sheet"
             showError = true
             return
@@ -655,8 +681,12 @@ struct SmartTokenUpsellView: View {
             topViewController = presented
         }
         
+        print("✅ [Upsell] Found top view controller: \(type(of: topViewController))")
+        print("✅ [Upsell] Presenting Stripe PaymentSheet now...")
+        
         // Present the payment sheet
         paymentSheet.present(from: topViewController) { result in
+            print("✅ [Upsell] PaymentSheet presentation completed with result")
             switch result {
             case .completed:
                 print("✅ [Upsell] Payment completed for token pack")
@@ -670,15 +700,21 @@ struct SmartTokenUpsellView: View {
                     
                     NotificationCenter.default.post(name: NSNotification.Name("TokensPurchased"), object: nil)
                 }
-                dismiss()
+                Task { @MainActor in
+                    dismiss()
+                }
             case .canceled:
-                print("⚠️ [Upsell] Payment canceled")
+                print("⚠️ [Upsell] Payment canceled by user")
             case .failed(let error):
                 print("❌ [Upsell] Payment failed: \(error.localizedDescription)")
-                errorMessage = "Payment failed: \(error.localizedDescription)"
-                showError = true
+                Task { @MainActor in
+                    errorMessage = "Payment failed: \(error.localizedDescription)"
+                    showError = true
+                }
             }
         }
+        
+        print("✅ [Upsell] PaymentSheet.present() called - sheet should appear now")
     }
     
     private func presentSubscriptionPaymentSheet() {
@@ -734,10 +770,24 @@ struct SmartTokenUpsellView: View {
                 let displayedPrice = selectedPeriod == .monthly ? tier.monthlyPrice : tier.annualPrice
                 print("✅ [Upsell] Creating subscription: tier=\(tier.rawValue), period=\(selectedPeriod.rawValue), priceId=\(priceId), displayedPrice=\(displayedPrice) cents")
                 
+                // Retrieve payment method ID from setup intent
+                var paymentMethodId = "default"
+                if let setupIntentSecret = currentSetupIntentClientSecret {
+                    do {
+                        paymentMethodId = try await GenieAPIService.shared.retrievePaymentMethodFromSetupIntent(
+                            setupIntentClientSecret: setupIntentSecret
+                        )
+                        print("✅ [Upsell] Retrieved payment method ID: \(paymentMethodId)")
+                    } catch {
+                        print("⚠️ [Upsell] Could not retrieve payment method ID, using 'default': \(error)")
+                        // Continue with "default" - backend may handle it automatically
+                    }
+                }
+                
                 let response = try await GenieAPIService.shared.createSubscription(
                     tier: tier.rawValue,
                     priceId: priceId,
-                    paymentMethodId: "default" // Uses customer's default payment method from SetupIntent
+                    paymentMethodId: paymentMethodId
                 )
                 
                 print("✅ [Upsell] Subscription created: tier=\(tier.rawValue), status=\(response.status ?? "unknown")")
@@ -782,16 +832,28 @@ struct SmartTokenUpsellView: View {
     
     private func reloadBalance() async {
         do {
-            let response = try await GenieAPIService.shared.getTokenBalance()
+            // Clear cache to ensure we get fresh balance from server
+            GenieAPIService.shared.clearTokenBalanceCache()
+            let response = try await GenieAPIService.shared.getTokenBalance(useCache: false)
             await MainActor.run {
                 // Use the balance field directly - it already includes subscription + top-up
                 // This is the correct total available tokens
-                currentBalance = max(response.balance, 0)
+                let newBalance = max(response.balance, 0)
                 
-                // Log breakdown for debugging
-                let subscriptionTokens = response.subscription?.tokensRemainingThisMonth ?? 0
-                let topUpTokens = response.subscription?.topUpBalance ?? 0
-                print("✅ [Upsell] Balance reloaded: \(currentBalance) tokens (balance field: \(response.balance), subscription remaining: \(subscriptionTokens), top-up: \(topUpTokens))")
+                // Only update if the new balance is different (likely increased after purchase)
+                // Don't overwrite with a higher value if we're showing an error response balance
+                // The error response balance is what the query endpoint actually sees
+                if newBalance != currentBalance {
+                    let previousBalance = currentBalance
+                    currentBalance = newBalance
+                    
+                    // Log breakdown for debugging
+                    let subscriptionTokens = response.subscription?.tokensRemainingThisMonth ?? 0
+                    let topUpTokens = response.subscription?.topUpBalance ?? 0
+                    print("✅ [Upsell] Balance reloaded: \(previousBalance) → \(currentBalance) tokens (balance field: \(response.balance), subscription remaining: \(subscriptionTokens), top-up: \(topUpTokens))")
+                } else {
+                    print("ℹ️ [Upsell] Balance unchanged: \(currentBalance) tokens")
+                }
             }
         } catch {
             print("❌ [Upsell] Error reloading balance: \(error)")
@@ -812,7 +874,11 @@ struct SmartTokenUpsellView: View {
         
         for attempt in 1...maxAttempts {
             do {
-                let response = try await GenieAPIService.shared.getTokenBalance()
+                // Clear cache on first attempt to ensure fresh data
+                if attempt == 1 {
+                    GenieAPIService.shared.clearTokenBalanceCache()
+                }
+                let response = try await GenieAPIService.shared.getTokenBalance(useCache: attempt > 1)
                 // Use balance field directly - it already includes subscription + top-up
                 let totalBalance = response.balance
                 let topUpTokens = response.subscription?.topUpBalance ?? 0

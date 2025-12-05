@@ -2528,25 +2528,39 @@ struct GymTrackerView: View {
     // MARK: - Data Fetching Methods
     
      func loadTodayWorkout() {
-        guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
+        let userIds = UserIDResolver.shared.getUserIdsForDataFetch()
+        guard !userIds.isEmpty else { return }
         isLoadingTodayWorkout = true
         
         Task {
-            // Fetch active plan logs
-            let planLogsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<GetWorkoutLogsResponse, Error>, Never>) in
-                ActivityService.shared.getPlanLogs(
-                    userId: userId,
-                    limit: 10,
-                    active: true
-                ) { result in
-                    continuation.resume(returning: result)
+            // Try fetching plan logs from all user IDs (Parse first, then Cognito)
+            var planLogs: [WorkoutLog] = []
+            for userId in userIds {
+                let planLogsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<GetWorkoutLogsResponse, Error>, Never>) in
+                    ActivityService.shared.getPlanLogs(
+                        userId: userId,
+                        limit: 10,
+                        active: true
+                    ) { result in
+                        continuation.resume(returning: result)
+                    }
+                }
+                
+                switch planLogsResult {
+                case .success(let response):
+                    if let logs = response.data?.logs, !logs.isEmpty {
+                        planLogs = logs
+                        break // Found active plans, stop trying other IDs
+                    }
+                case .failure:
+                    continue // Try next user ID
                 }
             }
             
-            switch planLogsResult {
-            case .success(let response):
-                if let planLogs = response.data?.logs, !planLogs.isEmpty {
-                    // Fetch all plans to find the active ones
+            if !planLogs.isEmpty {
+                // Fetch all plans to find the active ones - try all user IDs
+                var allPlans: [AWSWorkoutService.WorkoutItem] = []
+                for userId in userIds {
                     let plansResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                         AWSWorkoutService.shared.getPlans(userId: userId, limit: 100) { result in
                             continuation.resume(returning: result)
@@ -2555,19 +2569,24 @@ struct GymTrackerView: View {
                     
                     switch plansResult {
                     case .success(let planResponse):
-                        guard let planItems = planResponse.data else {
-                            await MainActor.run {
-                                self.isLoadingTodayWorkout = false
-                            }
-                            return
+                        if let items = planResponse.data {
+                            allPlans.append(contentsOf: items)
                         }
-                        // Find today's workout from active plans
-                        for planLog in planLogs {
-                            if let planId = planLog.planId,
-                               let planItem = planItems.first(where: { $0.planId == planId }) {
-                                
-                                let plan = viewModel.convertToPlan(from: planItem)
-                                let todayItem = await getTodayPlanItemFromPlan(plan, userId: userId)
+                    case .failure:
+                        continue
+                    }
+                }
+                
+                if !allPlans.isEmpty {
+                    // Find today's workout from active plans
+                    for planLog in planLogs {
+                        if let planId = planLog.planId,
+                           let planItem = allPlans.first(where: { $0.planId == planId }) {
+                            
+                            let plan = viewModel.convertToPlan(from: planItem)
+                            // Try to get today's workout - use first user ID for session lookup
+                            if let firstUserId = userIds.first {
+                                let todayItem = await getTodayPlanItemFromPlan(plan, userId: firstUserId)
                                 
                                 if let item = todayItem {
                                     await MainActor.run {
@@ -2585,18 +2604,12 @@ struct GymTrackerView: View {
                                 }
                             }
                         }
-                    case .failure(let error):
-                        print("❌ [GymTracker] Error loading plans: \(error.localizedDescription)")
                     }
                 }
-                await MainActor.run {
-                    self.isLoadingTodayWorkout = false
-                }
-            case .failure(let error):
-                print("❌ [GymTracker] Error loading today's workout: \(error.localizedDescription)")
-                await MainActor.run {
-                    self.isLoadingTodayWorkout = false
-                }
+            }
+            
+            await MainActor.run {
+                self.isLoadingTodayWorkout = false
             }
         }
     }
@@ -2644,22 +2657,25 @@ struct GymTrackerView: View {
         }
         
         // Otherwise, it's a workout session ID
-        // Fetch the session from AWS
-        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-            AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
-                continuation.resume(returning: result)
-            }
-        }
-        
-        switch result {
-        case .success(let response):
-            if let sessionItem = (response.data ?? []).first(where: { $0.sessionId == value }) {
-                if let session = viewModel.convertToWorkoutSession(from: sessionItem, userId: userId) {
-                    return .workout(session)
+        // Fetch the session from AWS - try all user IDs
+        let userIds = UserIDResolver.shared.getUserIdsForDataFetch()
+        for userId in userIds {
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
+                    continuation.resume(returning: result)
                 }
             }
-        case .failure(let error):
-            print("❌ [GymTracker] Error fetching session: \(error.localizedDescription)")
+            
+            switch result {
+            case .success(let response):
+                if let sessionItem = (response.data ?? []).first(where: { $0.sessionId == value }) {
+                    if let session = viewModel.convertToWorkoutSession(from: sessionItem, userId: userId) {
+                        return .workout(session)
+                    }
+                }
+            case .failure:
+                continue // Try next user ID
+            }
         }
         
         return nil
@@ -2676,36 +2692,53 @@ struct GymTrackerView: View {
     }
     
      func loadFeaturedContent() {
-        guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
+        let userIds = UserIDResolver.shared.getUserIdsForDataFetch()
+        guard !userIds.isEmpty else { return }
         isLoadingFeatured = true
         
         Task {
-            // Fetch user's exercises from AWS
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-                AWSWorkoutService.shared.getMovements(userId: userId, limit: 20) { result in
-                    continuation.resume(returning: result)
+            // Fetch user's exercises from AWS - try all user IDs
+            var allItems: [AWSWorkoutService.WorkoutItem] = []
+            var existingIds = Set<String>()
+            
+            for userId in userIds {
+                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                    AWSWorkoutService.shared.getMovements(userId: userId, limit: 20) { result in
+                        continuation.resume(returning: result)
+                    }
+                }
+                
+                switch result {
+                case .success(let response):
+                    if let items = response.data {
+                        let newItems = items.filter { item in
+                            guard let id = item.movementId else { return false }
+                            return !existingIds.contains(id)
+                        }
+                        for item in newItems {
+                            if let id = item.movementId {
+                                existingIds.insert(id)
+                            }
+                        }
+                        allItems.append(contentsOf: newItems)
+                    }
+                case .failure:
+                    continue // Try next user ID
                 }
             }
             
-            switch result {
-            case .success(let response):
-                guard let items = response.data else {
-                    await MainActor.run {
-                        self.isLoadingFeatured = false
-                    }
-                    return
-                }
-                // Convert to movement structs
-                let exercises = items.prefix(10).compactMap { item -> movement? in
-                    viewModel.convertToMovement(from: item)
-                }
-                
-                await MainActor.run {
-                    self.featuredExercises = exercises
-                    self.isLoadingFeatured = false
-                }
-            case .failure(let error):
-                print("❌ [GymTracker] Error loading featured exercises: \(error.localizedDescription)")
+            // Convert to movement structs
+            let exercises = allItems.prefix(10).compactMap { item -> movement? in
+                viewModel.convertToMovement(from: item)
+            }
+            
+            await MainActor.run {
+                self.featuredExercises = exercises
+                self.isLoadingFeatured = false
+            }
+            
+            if exercises.isEmpty {
+                print("❌ [GymTracker] No featured exercises found for any user ID")
                 await MainActor.run {
                     self.isLoadingFeatured = false
                 }
@@ -2714,27 +2747,42 @@ struct GymTrackerView: View {
     }
     
     func loadPersonalizedContent() {
-        guard let userId = UserIDHelper.shared.getCurrentUserID() else { return }
+        let userIds = UserIDResolver.shared.getUserIdsForDataFetch()
+        guard !userIds.isEmpty else { return }
         isLoadingRecommended = true
         
         Task {
-            // Fetch recent session logs to get recommendations
-            let logsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<GetWorkoutLogsResponse, Error>, Never>) in
-                ActivityService.shared.getSessionLogs(
-                    userId: userId,
-                    limit: 10
-                ) { result in
-                    continuation.resume(returning: result)
+            // Fetch recent session logs to get recommendations - try all user IDs
+            var allLogs: [WorkoutLog] = []
+            for userId in userIds {
+                let logsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<GetWorkoutLogsResponse, Error>, Never>) in
+                    ActivityService.shared.getSessionLogs(
+                        userId: userId,
+                        limit: 10
+                    ) { result in
+                        continuation.resume(returning: result)
+                    }
+                }
+                
+                switch logsResult {
+                case .success(let response):
+                    if let logs = response.data?.logs {
+                        allLogs.append(contentsOf: logs)
+                    }
+                case .failure:
+                    continue // Try next user ID
                 }
             }
             
-            switch logsResult {
-            case .success(let response):
-                if let logs = response.data?.logs {
-                    // Get unique session IDs from logs
-                    let sessionIds = Array(Set(logs.compactMap { $0.originalSessionId }))
-                    
-                    // Fetch sessions from AWS
+            if !allLogs.isEmpty {
+                // Get unique session IDs from logs
+                let sessionIds = Array(Set(allLogs.compactMap { $0.originalSessionId }))
+                
+                // Fetch sessions from AWS - try all user IDs
+                var allSessions: [AWSWorkoutService.WorkoutItem] = []
+                var existingSessionIds = Set<String>()
+                
+                for userId in userIds {
                     let sessionsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                         AWSWorkoutService.shared.getSessions(userId: userId, limit: 100) { result in
                             continuation.resume(returning: result)
@@ -2743,61 +2791,69 @@ struct GymTrackerView: View {
                     
                     switch sessionsResult {
                     case .success(let sessionResponse):
-                        guard let sessionItems = sessionResponse.data else {
-                            await MainActor.run {
-                                self.isLoadingRecommended = false
-                            }
-                            return
-                        }
-                        var sessions: [workoutSession] = []
-                        for sessionId in sessionIds {
-                            if let sessionItem = sessionItems.first(where: { $0.sessionId == sessionId }) {
-                                if let session = viewModel.convertToWorkoutSession(from: sessionItem, userId: userId) {
-                                    sessions.append(session)
+                        if let sessionItems = sessionResponse.data {
+                            // Avoid duplicates
+                            for item in sessionItems {
+                                if let id = item.sessionId, !existingSessionIds.contains(id) {
+                                    existingSessionIds.insert(id)
+                                    allSessions.append(item)
                                 }
                             }
                         }
-                        
-                        await MainActor.run {
-                            self.recommendedSessions = Array(sessions.prefix(5))
-                            self.recentSessions = Array(sessions.prefix(5))
-                            self.isLoadingRecommended = false
-                        }
-                    case .failure(let error):
-                        print("❌ [GymTracker] Error fetching sessions: \(error.localizedDescription)")
-                        await MainActor.run {
-                            self.isLoadingRecommended = false
-                        }
-                    }
-                } else {
-                    await MainActor.run {
-                        self.isLoadingRecommended = false
+                    case .failure:
+                        continue // Try next user ID
                     }
                 }
-            case .failure(let error):
-                print("❌ [GymTracker] Error loading personalized content: \(error.localizedDescription)")
+                
+                // Convert sessions
+                var sessions: [workoutSession] = []
+                for sessionId in sessionIds {
+                    if let sessionItem = allSessions.first(where: { $0.sessionId == sessionId }) {
+                        // Use the userId that found this session (or first one as fallback)
+                        let userIdForConversion = userIds.first ?? ""
+                        if let session = viewModel.convertToWorkoutSession(from: sessionItem, userId: userIdForConversion) {
+                            sessions.append(session)
+                        }
+                    }
+                }
+                
                 await MainActor.run {
-                    self.isLoadingRecommended = false
+                    self.recommendedSessions = Array(sessions.prefix(5))
+                    self.recentSessions = Array(sessions.prefix(5))
                 }
             }
             
-            // Also load active plans
-            let planLogsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<GetWorkoutLogsResponse, Error>, Never>) in
-                ActivityService.shared.getPlanLogs(
-                    userId: userId,
-                    limit: 10,
-                    active: true
-                ) { result in
+            // Also load active plans - try all user IDs
+            var activePlanLogs: [WorkoutLog] = []
+            for userId in userIds {
+                let planLogsResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<GetWorkoutLogsResponse, Error>, Never>) in
+                    ActivityService.shared.getPlanLogs(
+                        userId: userId,
+                        limit: 10,
+                        active: true
+                    ) { result in
                     continuation.resume(returning: result)
                 }
             }
             
-            switch planLogsResult {
-            case .success(let response):
-                if let planLogs = response.data?.logs {
-                    let planIds = Array(Set(planLogs.compactMap { $0.planId }))
-                    
-                    // Fetch plans from AWS
+                switch planLogsResult {
+                case .success(let response):
+                    if let planLogs = response.data?.logs {
+                        activePlanLogs.append(contentsOf: planLogs)
+                    }
+                case .failure:
+                    continue // Try next user ID
+                }
+            }
+            
+            if !activePlanLogs.isEmpty {
+                let planIds = Array(Set(activePlanLogs.compactMap { $0.planId }))
+                
+                // Fetch plans from AWS - try all user IDs
+                var allPlans: [AWSWorkoutService.WorkoutItem] = []
+                var existingPlanIds = Set<String>()
+                
+                for userId in userIds {
                     let plansResult = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                         AWSWorkoutService.shared.getPlans(userId: userId, limit: 100) { result in
                             continuation.resume(returning: result)
@@ -2806,25 +2862,34 @@ struct GymTrackerView: View {
                     
                     switch plansResult {
                     case .success(let planResponse):
-                        guard let planItems = planResponse.data else {
-                            return
-                        }
-                        var plans: [plan] = []
-                        for planId in planIds {
-                            if let planItem = planItems.first(where: { $0.planId == planId }) {
-                                plans.append(viewModel.convertToPlan(from: planItem))
+                        if let planItems = planResponse.data {
+                            for item in planItems {
+                                if let id = item.planId, !existingPlanIds.contains(id) {
+                                    existingPlanIds.insert(id)
+                                    allPlans.append(item)
+                                }
                             }
                         }
-                        
-                        await MainActor.run {
-                            self.activePlans = plans
-                        }
-                    case .failure(let error):
-                        print("❌ [GymTracker] Error fetching plans: \(error.localizedDescription)")
+                    case .failure:
+                        continue // Try next user ID
                     }
                 }
-            case .failure(let error):
-                print("❌ [GymTracker] Error loading active plans: \(error.localizedDescription)")
+                
+                var plans: [plan] = []
+                for planId in planIds {
+                    if let planItem = allPlans.first(where: { $0.planId == planId }) {
+                        plans.append(viewModel.convertToPlan(from: planItem))
+                    }
+                }
+                
+                await MainActor.run {
+                    self.activePlans = plans
+                    self.isLoadingRecommended = false
+                }
+            } else {
+                await MainActor.run {
+                    self.isLoadingRecommended = false
+                }
             }
         }
     }
@@ -2992,7 +3057,7 @@ extension GymTrackingEngine {
     }
     
     func startOpenTraining() {
-        guard let userId = UserIDHelper.shared.getCurrentUserID() else {
+        guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
             print("❌ [OpenTraining] Cannot start - no user ID")
             return
         }
@@ -6294,7 +6359,11 @@ struct BrowseLibraryView: View {
     }
     
     private func loadItems() {
-        guard let userId = UserIDHelper.shared.getCurrentUserID() else {
+        // Use getUserIdsForDataFetch to get all user IDs (Parse first, then Cognito)
+        // This ensures we find data stored under either ID
+        let userIds = UserIDResolver.shared.getUserIdsForDataFetch()
+        
+        guard !userIds.isEmpty else {
             isLoading = false
             return
         }
@@ -6302,61 +6371,76 @@ struct BrowseLibraryView: View {
         Task {
             switch browseType {
             case .exercises:
-                await loadAllMovements(userId: userId)
+                await loadAllMovements(userIds: userIds)
                 
             case .sessions:
-                await loadAllSessions(userId: userId)
+                await loadAllSessions(userIds: userIds)
                 
             case .plans:
-                await loadAllPlans(userId: userId)
+                await loadAllPlans(userIds: userIds)
             }
         }
     }
     
-    private func loadAllMovements(userId: String) async {
+    private func loadAllMovements(userIds: [String]) async {
         var allItems: [AWSWorkoutService.WorkoutItem] = []
-        var lastEvaluatedKey: String? = nil
+        var existingIds = Set<String>()
         
-        // First load user's movements
-        repeat {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-                AWSWorkoutService.shared.getMovements(
-                    userId: userId,
-                    limit: 100,
-                    lastEvaluatedKey: lastEvaluatedKey
-                ) { result in
-                    continuation.resume(returning: result)
+        // Load user's movements from all IDs (Parse first, then Cognito)
+        for userId in userIds {
+            var lastEvaluatedKey: String? = nil
+            repeat {
+                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                    AWSWorkoutService.shared.getMovements(
+                        userId: userId,
+                        limit: 100,
+                        lastEvaluatedKey: lastEvaluatedKey
+                    ) { result in
+                        continuation.resume(returning: result)
+                    }
                 }
-            }
-            
-            switch result {
-            case .success(let response):
-                if let items = response.data {
-                    allItems.append(contentsOf: items)
-                    lastEvaluatedKey = response.lastEvaluatedKey
-                    print("📥 [BrowseLibrary] Loaded \(items.count) user movements (total: \(allItems.count))")
-                    
-                    if response.lastEvaluatedKey == nil {
+                
+                switch result {
+                case .success(let response):
+                    if let items = response.data {
+                        // Avoid duplicates across different user IDs
+                        let newItems = items.filter { item in
+                            guard let id = item.movementId else { return false }
+                            return !existingIds.contains(id)
+                        }
+                        
+                        for item in newItems {
+                            if let id = item.movementId {
+                                existingIds.insert(id)
+                            }
+                        }
+                        
+                        allItems.append(contentsOf: newItems)
+                        lastEvaluatedKey = response.lastEvaluatedKey
+                        print("📥 [BrowseLibrary] Loaded \(newItems.count) user movements for ID \(userId) (total: \(allItems.count))")
+                        
+                        if response.lastEvaluatedKey == nil {
+                            break
+                        }
+                    } else {
                         break
                     }
-                } else {
+                case .failure(let error):
+                    print("❌ [BrowseLibrary] Error loading user movements for ID \(userId): \(error.localizedDescription)")
                     break
                 }
-            case .failure(let error):
-                print("❌ [BrowseLibrary] Error loading user movements: \(error.localizedDescription)")
-                break
-            }
-        } while lastEvaluatedKey != nil
+            } while lastEvaluatedKey != nil
+        }
         
         // Then load public/starter movements (available to everyone)
-        lastEvaluatedKey = nil
+        var publicLastEvaluatedKey: String? = nil
         repeat {
             let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
                 AWSWorkoutService.shared.getMovements(
                     userId: nil,
                     isPublic: true,
                     limit: 100,
-                    lastEvaluatedKey: lastEvaluatedKey
+                    lastEvaluatedKey: publicLastEvaluatedKey
                 ) { result in
                     continuation.resume(returning: result)
                 }
@@ -6372,7 +6456,7 @@ struct BrowseLibraryView: View {
                         return !existingIds.contains(id)
                     }
                     allItems.append(contentsOf: newItems)
-                    lastEvaluatedKey = response.lastEvaluatedKey
+                    publicLastEvaluatedKey = response.lastEvaluatedKey
                     print("📥 [BrowseLibrary] Loaded \(newItems.count) public movements (total: \(allItems.count))")
                     
                     if response.lastEvaluatedKey == nil {
@@ -6385,7 +6469,7 @@ struct BrowseLibraryView: View {
                 print("❌ [BrowseLibrary] Error loading public movements: \(error.localizedDescription)")
                 break
             }
-        } while lastEvaluatedKey != nil
+        } while publicLastEvaluatedKey != nil
         
         let exercises = allItems.compactMap { item -> movement? in
                         var mov = movement()
@@ -6402,7 +6486,15 @@ struct BrowseLibraryView: View {
         }
                         mov.isTimed = item.isTimed ?? false
                         
-                        // Parse sets if available
+                        // Parse sets if available - handle templateSets, firstSectionSets, secondSectionSets, weavedSets
+                        // templateSets are stored directly on the item
+                        if let templateSets = item.templateSets {
+                            mov.templateSets = templateSets.map { setDict in
+                                ModernGymTrackerViewController.parseSet(from: setDict)
+                            }
+                        }
+                        
+                        // Parse sets from movements array (for sessions)
                         if let movementsData = item.movements, let firstMovement = movementsData.first as? [String: Any] {
                             // Parse firstSectionSets
                             if let firstSectionSets = firstMovement["firstSectionSets"] as? [[String: Any]] {
@@ -6424,6 +6516,30 @@ struct BrowseLibraryView: View {
                                     ModernGymTrackerViewController.parseSet(from: setDict)
                                 }
                             }
+                            
+                            // Also check for templateSets in movements array
+                            if let templateSets = firstMovement["templateSets"] as? [[String: Any]] {
+                                mov.templateSets = templateSets.map { setDict in
+                                    ModernGymTrackerViewController.parseSet(from: setDict)
+                                }
+                            }
+                        }
+                        
+                        // Also parse sets stored directly on WorkoutItem (for movements)
+                        if let firstSectionSets = item.firstSectionSets {
+                            mov.firstSectionSets = firstSectionSets.map { setDict in
+                                ModernGymTrackerViewController.parseSet(from: setDict)
+                            }
+                        }
+                        if let secondSectionSets = item.secondSectionSets {
+                            mov.secondSectionSets = secondSectionSets.map { setDict in
+                                ModernGymTrackerViewController.parseSet(from: setDict)
+                            }
+                        }
+                        if let weavedSets = item.weavedSets {
+                            mov.weavedSets = weavedSets.map { setDict in
+                                ModernGymTrackerViewController.parseSet(from: setDict)
+                            }
                         }
                         
                         return mov
@@ -6435,79 +6551,56 @@ struct BrowseLibraryView: View {
         }
     }
     
-    private func loadAllSessions(userId: String) async {
+    private func loadAllSessions(userIds: [String]) async {
         var allItems: [AWSWorkoutService.WorkoutItem] = []
-        var lastEvaluatedKey: String? = nil
+        var existingIds = Set<String>()
         
-        // First load user's sessions
-        repeat {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-                AWSWorkoutService.shared.getSessions(
-                    userId: userId,
-                    limit: 100,
-                    lastEvaluatedKey: lastEvaluatedKey
-                ) { result in
-                    continuation.resume(returning: result)
+        // Load user's sessions from all IDs (Parse first, then Cognito)
+        // No public sessions - only user's own
+        for userId in userIds {
+            var lastEvaluatedKey: String? = nil
+            repeat {
+                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                    AWSWorkoutService.shared.getSessions(
+                        userId: userId,
+                        limit: 100,
+                        lastEvaluatedKey: lastEvaluatedKey
+                    ) { result in
+                        continuation.resume(returning: result)
+                    }
                 }
-            }
-            
-            switch result {
-            case .success(let response):
-                if let items = response.data {
-                    allItems.append(contentsOf: items)
-                    lastEvaluatedKey = response.lastEvaluatedKey
-                    print("📥 [BrowseLibrary] Loaded \(items.count) user sessions (total: \(allItems.count))")
-                    
-                    if response.lastEvaluatedKey == nil {
+                
+                switch result {
+                case .success(let response):
+                    if let items = response.data {
+                        // Avoid duplicates across different user IDs
+                        let newItems = items.filter { item in
+                            guard let id = item.sessionId else { return false }
+                            return !existingIds.contains(id)
+                        }
+                        
+                        for item in newItems {
+                            if let id = item.sessionId {
+                                existingIds.insert(id)
+                            }
+                        }
+                        
+                        allItems.append(contentsOf: newItems)
+                        lastEvaluatedKey = response.lastEvaluatedKey
+                        print("📥 [BrowseLibrary] Loaded \(newItems.count) user sessions for ID \(userId) (total: \(allItems.count))")
+                        
+                        if response.lastEvaluatedKey == nil {
+                            break
+                        }
+                    } else {
                         break
                     }
-                } else {
+                case .failure(let error):
+                    print("❌ [BrowseLibrary] Error loading user sessions for ID \(userId): \(error.localizedDescription)")
                     break
                 }
-            case .failure(let error):
-                print("❌ [BrowseLibrary] Error loading user sessions: \(error.localizedDescription)")
-                break
-            }
-        } while lastEvaluatedKey != nil
-        
-        // Then load public sessions (available to everyone)
-        lastEvaluatedKey = nil
-        repeat {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-                AWSWorkoutService.shared.getSessions(
-                    userId: nil,
-                    isPublic: true,
-                    limit: 100,
-                    lastEvaluatedKey: lastEvaluatedKey
-                ) { result in
-                    continuation.resume(returning: result)
-                }
-            }
-            
-            switch result {
-            case .success(let response):
-                if let items = response.data {
-                    // Only add items that aren't already in the list (avoid duplicates)
-                    let existingIds = Set(allItems.compactMap { $0.sessionId })
-                    let newItems = items.filter { item in
-                        guard let id = item.sessionId else { return false }
-                        return !existingIds.contains(id)
-                    }
-                    allItems.append(contentsOf: newItems)
-                    lastEvaluatedKey = response.lastEvaluatedKey
-                    print("📥 [BrowseLibrary] Loaded \(newItems.count) public sessions (total: \(allItems.count))")
-                    
-                    if response.lastEvaluatedKey == nil {
-                        break
-                    }
-                } else {
-                    break
-                }
-            case .failure(let error):
-                print("❌ [BrowseLibrary] Error loading public sessions: \(error.localizedDescription)")
-                break
-            }
-        } while lastEvaluatedKey != nil
+            } while lastEvaluatedKey != nil
+        }
         
         var sessions: [workoutSession] = []
         for item in allItems {
@@ -6545,6 +6638,28 @@ struct BrowseLibraryView: View {
                                         mov.equipmentsNeeded = equipmentsNeeded ? ["Equipment needed"] : []
                                     }
                                     
+                                    // Parse sets for this movement in the session
+                                    if let templateSets = dict["templateSets"] as? [[String: Any]] {
+                                        mov.templateSets = templateSets.map { setDict in
+                                            ModernGymTrackerViewController.parseSet(from: setDict)
+                                        }
+                                    }
+                                    if let firstSectionSets = dict["firstSectionSets"] as? [[String: Any]] {
+                                        mov.firstSectionSets = firstSectionSets.map { setDict in
+                                            ModernGymTrackerViewController.parseSet(from: setDict)
+                                        }
+                                    }
+                                    if let secondSectionSets = dict["secondSectionSets"] as? [[String: Any]] {
+                                        mov.secondSectionSets = secondSectionSets.map { setDict in
+                                            ModernGymTrackerViewController.parseSet(from: setDict)
+                                        }
+                                    }
+                                    if let weavedSets = dict["weavedSets"] as? [[String: Any]] {
+                                        mov.weavedSets = weavedSets.map { setDict in
+                                            ModernGymTrackerViewController.parseSet(from: setDict)
+                                        }
+                                    }
+                                    
                                     // Only return movement if it has a valid name (not just the default)
                                     guard let name = mov.movement1Name, !name.isEmpty, name != "Unnamed Movement" else {
                                         return nil
@@ -6563,79 +6678,56 @@ struct BrowseLibraryView: View {
         }
     }
     
-    private func loadAllPlans(userId: String) async {
+    private func loadAllPlans(userIds: [String]) async {
         var allItems: [AWSWorkoutService.WorkoutItem] = []
-        var lastEvaluatedKey: String? = nil
+        var existingIds = Set<String>()
         
-        // First load user's plans
-        repeat {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-                AWSWorkoutService.shared.getPlans(
-                    userId: userId,
-                    limit: 100,
-                    lastEvaluatedKey: lastEvaluatedKey
-                ) { result in
-                    continuation.resume(returning: result)
+        // Load user's plans from all IDs (Parse first, then Cognito)
+        // No public plans - only user's own
+        for userId in userIds {
+            var lastEvaluatedKey: String? = nil
+            repeat {
+                let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
+                    AWSWorkoutService.shared.getPlans(
+                        userId: userId,
+                        limit: 100,
+                        lastEvaluatedKey: lastEvaluatedKey
+                    ) { result in
+                        continuation.resume(returning: result)
+                    }
                 }
-            }
-            
-            switch result {
-            case .success(let response):
-                if let items = response.data {
-                    allItems.append(contentsOf: items)
-                    lastEvaluatedKey = response.lastEvaluatedKey
-                    print("📥 [BrowseLibrary] Loaded \(items.count) user plans (total: \(allItems.count))")
-                    
-                    if response.lastEvaluatedKey == nil {
+                
+                switch result {
+                case .success(let response):
+                    if let items = response.data {
+                        // Avoid duplicates across different user IDs
+                        let newItems = items.filter { item in
+                            guard let id = item.planId else { return false }
+                            return !existingIds.contains(id)
+                        }
+                        
+                        for item in newItems {
+                            if let id = item.planId {
+                                existingIds.insert(id)
+                            }
+                        }
+                        
+                        allItems.append(contentsOf: newItems)
+                        lastEvaluatedKey = response.lastEvaluatedKey
+                        print("📥 [BrowseLibrary] Loaded \(newItems.count) user plans for ID \(userId) (total: \(allItems.count))")
+                        
+                        if response.lastEvaluatedKey == nil {
+                            break
+                        }
+                    } else {
                         break
                     }
-                } else {
+                case .failure(let error):
+                    print("❌ [BrowseLibrary] Error loading user plans for ID \(userId): \(error.localizedDescription)")
                     break
                 }
-            case .failure(let error):
-                print("❌ [BrowseLibrary] Error loading user plans: \(error.localizedDescription)")
-                break
-            }
-        } while lastEvaluatedKey != nil
-        
-        // Then load public plans (available to everyone)
-        lastEvaluatedKey = nil
-        repeat {
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<AWSWorkoutService.GetWorkoutResponse, Error>, Never>) in
-                AWSWorkoutService.shared.getPlans(
-                    userId: nil,
-                    isPublic: true,
-                    limit: 100,
-                    lastEvaluatedKey: lastEvaluatedKey
-                ) { result in
-                    continuation.resume(returning: result)
-                }
-            }
-            
-            switch result {
-            case .success(let response):
-                if let items = response.data {
-                    // Only add items that aren't already in the list (avoid duplicates)
-                    let existingIds = Set(allItems.compactMap { $0.planId })
-                    let newItems = items.filter { item in
-                        guard let id = item.planId else { return false }
-                        return !existingIds.contains(id)
-                    }
-                    allItems.append(contentsOf: newItems)
-                    lastEvaluatedKey = response.lastEvaluatedKey
-                    print("📥 [BrowseLibrary] Loaded \(newItems.count) public plans (total: \(allItems.count))")
-                    
-                    if response.lastEvaluatedKey == nil {
-                        break
-                    }
-                } else {
-                    break
-                }
-            case .failure(let error):
-                print("❌ [BrowseLibrary] Error loading public plans: \(error.localizedDescription)")
-                break
-            }
-        } while lastEvaluatedKey != nil
+            } while lastEvaluatedKey != nil
+        }
         
         var plans: [plan] = []
         for item in allItems {
@@ -7052,70 +7144,82 @@ struct SetRowView: View {
     let isTimed: Bool
     
     var body: some View {
-        HStack(spacing: 16) {
-            // Set number
+        HStack(spacing: 12) {
+            // Set number badge (more compact)
             Text("\(setNumber)")
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: 13, weight: .bold))
                 .foregroundColor(.white)
-                .frame(width: 30, alignment: .leading)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.15))
+                )
             
             Spacer()
             
             if isTimed {
-                // Timed set display
+                // Timed set display - more compact
                 if let duration = set.duration, duration > 0 {
-                    let seconds = duration
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Image(systemName: "timer")
-                            .font(.system(size: 14))
+                            .font(.system(size: 12))
                             .foregroundColor(.white.opacity(0.7))
                         
-                        Text(formatTime(seconds))
-                            .font(.system(size: 16, weight: .medium))
+                        Text(formatTime(duration))
+                            .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.white)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color.white.opacity(0.1))
+                    )
                 } else {
-                    Text("No time set")
-                        .font(.system(size: 14))
+                    Text("No time")
+                        .font(.system(size: 13))
                         .foregroundColor(.white.opacity(0.5))
                 }
             } else {
-                // Rep-based set display
-                HStack(spacing: 16) {
-                    if let weight = set.weight {
+                // Rep-based set display - more compact layout
+                HStack(spacing: 12) {
+                    if let reps = set.reps {
                         HStack(spacing: 4) {
-                            Image(systemName: "dumbbell.fill")
-                                .font(.system(size: 12))
+                            Image(systemName: "repeat")
+                                .font(.system(size: 11))
                                 .foregroundColor(.white.opacity(0.7))
-                            Text(String(format: "%.1f lbs", weight))
-                                .font(.system(size: 16, weight: .medium))
+                            Text("\(reps)")
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(.white)
                         }
                     }
                     
-                    if let reps = set.reps {
+                    if let weight = set.weight, weight > 0 {
                         HStack(spacing: 4) {
-                            Image(systemName: "repeat")
-                                .font(.system(size: 12))
+                            Image(systemName: "dumbbell.fill")
+                                .font(.system(size: 11))
                                 .foregroundColor(.white.opacity(0.7))
-                            Text("\(reps) reps")
-                                .font(.system(size: 16, weight: .medium))
+                            Text(String(format: "%.1f", weight))
+                                .font(.system(size: 15, weight: .semibold))
                                 .foregroundColor(.white)
+                            Text("lbs")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.6))
                         }
                     }
                     
                     if set.weight == nil && set.reps == nil {
-                        Text("No data")
+                        Text("—")
                             .font(.system(size: 14))
                             .foregroundColor(.white.opacity(0.5))
                     }
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 10)
                 .fill(Color.white.opacity(0.08))
         )
     }
@@ -7125,7 +7229,11 @@ struct SetRowView: View {
         let remainingSeconds = seconds % 60
         
         if minutes > 0 {
-            return String(format: "%d:%02d", minutes, remainingSeconds)
+            if remainingSeconds == 0 {
+                return "\(minutes)m"
+            } else {
+                return String(format: "%d:%02d", minutes, remainingSeconds)
+            }
         } else {
             return "\(remainingSeconds)s"
         }

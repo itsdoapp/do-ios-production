@@ -32,6 +32,10 @@
 	<string>We need your location to track your workouts, show routes, and provide accurate weather information</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>We need your location to track your workouts in the background, show routes, and provide accurate weather information</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

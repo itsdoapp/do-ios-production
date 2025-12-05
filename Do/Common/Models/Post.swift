@@ -139,7 +139,7 @@ public struct Post: Codable, Equatable, Hashable, Identifiable {
     
     // AWS API fields (for decoding)
     private let postId: String?
-    private let userId: String?
+     let userId: String?
     private let caption: String?
     public let createdAt: String?
     private let updatedAt: String?

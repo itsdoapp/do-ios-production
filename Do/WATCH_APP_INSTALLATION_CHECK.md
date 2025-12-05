@@ -141,3 +141,6 @@ Your watch app configuration looks **GOOD** for installation! The main things ve
 **Next step:** Build from Xcode (Do scheme → iPhone → Run) and the watch app should install automatically to your paired Apple Watch.
 
 
+
+
+

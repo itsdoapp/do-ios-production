@@ -378,6 +378,7 @@ struct SportsTrackerView: View {
     @State var weatherIconName: String = "sun.max.fill"
     @State var locationCity: String = "Location"
     @State private var selectedCategoryIndex: Int = 8 // Default to Sports (index 8)
+    @State private var hasReceivedLocationForWeather = false
     weak var categoryDelegate: CategorySelectionDelegate?
     // Category data
     private let categoryTitles = ["Running", "Gym", "Cycling", "Hiking", "Walking", "Swimming", "Food", "Meditation", "Sports"]
@@ -423,9 +424,25 @@ struct SportsTrackerView: View {
                 .padding(.vertical, 20)
             }
             .onAppear {
-                loadWeatherData()
+                // Wait for location before loading weather (similar to running tracker)
+                checkLocationAndLoadWeather()
                 viewModel.findNearbySportsLocations()
                 loadSportsStatistics()
+            }
+            .onReceive(locationManager.$location.compactMap { $0 }) { location in
+                // When location becomes available, load weather if we're waiting for it
+                if !hasReceivedLocationForWeather && !weatherDataLoaded {
+                    print("📍 [Sports] Location received via onReceive: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+                    hasReceivedLocationForWeather = true
+                    
+                    // Stop location immediately - we have what we need
+                    ModernLocationManager.shared.stopLocation(for: .routeDisplay)
+                    
+                    // Load weather data
+                    Task {
+                        await loadWeatherDataWithLocation(location)
+                    }
+                }
             }
         }
         .sheet(isPresented: $showingCategorySelector) {
@@ -555,7 +572,12 @@ struct SportsTrackerView: View {
                     WindyOverlay(nightMode: isNighttime())
                 case .unknown:
                     // Show a default clear animation instead of empty view to preserve visual continuity
-                    ClearDayView()
+                    // This prevents the animation from disappearing when weather data is temporarily unavailable
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        ClearDayView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -797,6 +819,7 @@ struct SportsTrackerView: View {
                 Image(systemName: weatherIconName)
                     .font(.system(size: 24))
                     .foregroundColor(.white)
+                    .id("weather-icon-\(weatherIconName)") // Force refresh when icon changes
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
@@ -807,10 +830,12 @@ struct SportsTrackerView: View {
                     Text(getWeatherDescription(condition: weatherCondition, isNightMode: isNighttime()))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.white)
+                        .id("weather-desc-\(weatherCondition.rawValue)") // Force refresh
                     
                     Text(formatTemperature(temperature))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.white)
+                        .id("temperature-\(temperature)") // Force refresh when temperature changes
                 }
                 
                 Spacer()
@@ -854,11 +879,24 @@ struct SportsTrackerView: View {
     
     // Helper methods
     private func formatTemperature(_ temp: Double) -> String {
-        return "\(Int(round(temp)))°C"
+        if temp == 0.0 {
+            return UserPreferences.shared.useMetricSystem ? "-- °C" : "-- °F"
+        }
+        
+        if UserPreferences.shared.useMetricSystem {
+            return "\(Int(round(temp)))°C"
+            } else {
+            // Convert Celsius to Fahrenheit: (C * 9/5) + 32
+            let fahrenheit = (temp * 9/5) + 32
+            return "\(Int(round(fahrenheit)))°F"
+        }
     }
     
+    // Helper method to format wind speed according to user preferences
     private func formatWindSpeed(_ speed: Double) -> String {
-        return "\(Int(speed)) mph"
+        return UserPreferences.shared.useMetricSystem ? 
+            "\(Int(speed * 1.60934)) km/h" : 
+            "\(Int(speed)) mph"
     }
     
     private func getWeatherDescription(condition: WeatherCondition, isNightMode: Bool) -> String {
@@ -938,12 +976,177 @@ struct SportsTrackerView: View {
                     }
                 }
             } else {
-                // Location services unavailable
-                await MainActor.run {
-                    self.locationCity = "Location services unavailable"
-                    self.weatherDataLoaded = false
-                    self.weatherIconName = "location.slash"
+                // Location services unavailable - wait for location
+                print("⏳ [Sports] No location yet, waiting...")
+                // Wait up to 5 seconds for location
+                for _ in 0..<10 {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                    if let location = locationManager.location {
+                        print("📍 [Sports] Location received after wait")
+                        // Retry with the new location
+                        await loadWeatherDataWithLocation(location)
+                        return
+                    }
                 }
+                // Still no location after waiting
+                await MainActor.run {
+                    self.locationCity = "Location unavailable"
+                    self.weatherDataLoaded = true // Show view even without location
+                }
+            }
+        }
+    }
+    
+    private func checkLocationAndLoadWeather() {
+        let status = CLLocationManager.authorizationStatus()
+        
+        switch status {
+        case .authorizedWhenInUse, .authorizedAlways:
+            print("✅ [Sports] Location authorized - checking for cached location")
+            
+            // Always prefer cached location if available and recent (within 10 minutes)
+            if let cachedLocation = locationManager.location,
+               Date().timeIntervalSince(cachedLocation.timestamp) < 600 {
+                print("📍 [Sports] Using cached location (age: \(Int(Date().timeIntervalSince(cachedLocation.timestamp)))s)")
+                // Load weather immediately with cached location
+                Task {
+                    await loadWeatherDataWithLocation(cachedLocation)
+                }
+            } else {
+                print("📍 [Sports] No cached location or location is stale - requesting location...")
+                // Request one-time location
+                ModernLocationManager.shared.requestLocation(for: .routeDisplay)
+                
+                // Wait for location, then load weather
+                waitForLocationThenLoadWeather()
+            }
+            
+        case .notDetermined:
+            print("📍 [Sports] Location authorization not determined - requesting...")
+            locationManager.manager.requestWhenInUseAuthorization()
+            // Wait a bit then try again
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.checkLocationAndLoadWeather()
+            }
+            
+        case .denied, .restricted:
+            print("❌ [Sports] Location authorization denied/restricted")
+            Task {
+                await MainActor.run {
+                    self.locationCity = "Location access denied"
+                    self.weatherDataLoaded = true // Show view even without location
+                }
+            }
+            
+        @unknown default:
+            break
+        }
+    }
+    
+    private func waitForLocationThenLoadWeather() {
+        print("⏳ [Sports] Waiting for location updates...")
+        hasReceivedLocationForWeather = false
+        
+        // Request location if not already available
+        if locationManager.location == nil {
+            ModernLocationManager.shared.requestLocation(for: .routeDisplay)
+        }
+        
+        // Set timeout - if no location after 10 seconds, try loading anyway
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [self] in
+            if !self.hasReceivedLocationForWeather {
+                print("❌ [Sports] Location timeout - no location received after 10 seconds")
+                // Try loading weather anyway if we have any location
+                Task { @MainActor in
+                    if let location = self.locationManager.location {
+                        await self.loadWeatherDataWithLocation(location)
+                    } else {
+                        self.locationCity = "Location unavailable"
+                        self.weatherDataLoaded = true // Show view even without location
+                    }
+                }
+            }
+        }
+    }
+    
+    private func loadWeatherDataWithLocation(_ location: CLLocation) async {
+        print("📱 [Sports] Starting weather data loading with location")
+        
+        // Initialize weather state
+        await MainActor.run {
+            if !self.weatherDataLoaded || self.weatherCondition == .unknown {
+                self.weatherDataLoaded = false
+            }
+            if self.temperature == 0.0 {
+                self.locationCity = "Loading location..."
+            }
+        }
+        
+        print("📍 [Sports] Fetching weather for: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        
+        // Start geocoding in parallel with weather fetch
+        Task(priority: .userInitiated) {
+            await updateLocationNameAsync(for: location)
+        }
+        
+        // Load weather data
+        print("🌤️ [Sports] Calling weatherService.fetchWeather...")
+        let (data, error) = await weatherService.fetchWeather(for: location)
+        print("🌤️ [Sports] weatherService.fetchWeather returned - data: \(data != nil ? "present" : "nil"), error: \(error?.localizedDescription ?? "none")")
+        
+        // If geocoding hasn't completed yet, wait a bit
+        if locationCity == "Loading location..." {
+            print("⏳ [Sports] Waiting for geocoding to complete...")
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            if locationCity == "Loading location..." {
+                print("⏱️ [Sports] Geocoding timeout, using coordinates as fallback")
+                await MainActor.run {
+                    self.locationCity = String(format: "%.4f, %.4f", location.coordinate.latitude, location.coordinate.longitude)
+                }
+            }
+        }
+        
+        await MainActor.run {
+            if let data = data {
+                self.temperature = data.temperature
+                self.humidity = data.humidity
+                self.windSpeed = data.windSpeed
+                self.weatherCondition = data.condition
+                self.weatherIconName = data.condition.icon
+                self.weatherDataLoaded = true
+                print("✅ [Sports] Weather data loaded successfully")
+            } else if let error = error {
+                print("❌ [Sports] Error loading weather: \(error.localizedDescription)")
+                self.weatherDataLoaded = true // Still show view even with error
+            }
+        }
+    }
+    
+    private func updateLocationNameAsync(for location: CLLocation) async {
+        let geocoder = CLGeocoder()
+        do {
+            let placemarks = try await geocoder.reverseGeocodeLocation(location)
+            if let placemark = placemarks.first {
+                let city = placemark.locality ?? ""
+                let state = placemark.administrativeArea ?? ""
+                let country = placemark.country ?? ""
+                
+                var formattedLocation = city
+                
+                if country == "United States" || country == "USA" {
+                    if !state.isEmpty { formattedLocation += ", \(state)" }
+                } else {
+                    if !country.isEmpty { formattedLocation += ", \(country)" }
+                }
+                
+                await MainActor.run {
+                    self.locationCity = formattedLocation.isEmpty ? "Location unavailable" : formattedLocation
+                }
+            }
+        } catch {
+            print("❌ [Sports] Geocoding error: \(error)")
+            await MainActor.run {
+                self.locationCity = String(format: "%.4f, %.4f", location.coordinate.latitude, location.coordinate.longitude)
             }
         }
     }

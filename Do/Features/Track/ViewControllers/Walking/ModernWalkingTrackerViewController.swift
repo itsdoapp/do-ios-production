@@ -2085,6 +2085,8 @@ struct WalkingTrackerView: View {
                     },
                     onDismiss: { showRoutePreview = false }
                 )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
         }
     }
@@ -2187,7 +2189,8 @@ struct WalkingTrackerView: View {
 
     private func weatherView() -> some View {
         ZStack(alignment: .top) {
-            getRunStyleWeatherGradient()
+            // Background
+            getWeatherGradient(for: viewModel.weatherCondition)
                 .cornerRadius(22)
                 .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
                 
@@ -2242,7 +2245,12 @@ struct WalkingTrackerView: View {
                     WindyOverlay(nightMode: isNighttime())
                 case .unknown:
                     // Show a default clear animation instead of empty view to preserve visual continuity
-                    ClearDayView()
+                    // This prevents the animation from disappearing when weather data is temporarily unavailable
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        ClearDayView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2253,11 +2261,17 @@ struct WalkingTrackerView: View {
             .id("weather-animation-\(viewModel.weatherCondition.rawValue)")
             .allowsHitTesting(false) // Allow touches to pass through to content
             
+            // Content - enhanced with location and forecast (placed on top of animation)
             VStack(spacing: 12) {
-                walkWeatherHeader()
-                walkWeatherContent()
+                // Main weather info
+                weatherHeader()
+            
+                // Weather details
+                weatherContent()
                     .padding(.horizontal)
-                walkForecastRow()
+                    
+                // Forecast for upcoming hours
+                forecastRow()
                     .padding(.bottom, 10)
             }
             .padding(.vertical, 15)
@@ -2269,10 +2283,15 @@ struct WalkingTrackerView: View {
     }
 
     
-    private func getRunStyleWeatherGradient() -> LinearGradient {
-        let hour = Calendar.current.component(.hour, from: Date())
-        let colors = Color.weatherGradient(for: viewModel.weatherCondition, hour: hour)
-        return LinearGradient(gradient: Gradient(colors: [colors.0, colors.1]), startPoint: .top, endPoint: .bottom)
+    private func getWeatherGradient(for condition: WeatherCondition) -> LinearGradient {
+        let currentHour = Calendar.current.component(.hour, from: Date())
+        let colors = Color.weatherGradient(for: condition, hour: currentHour)
+        
+        return LinearGradient(
+            gradient: Gradient(colors: [colors.0, colors.1]),
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
     
     // Helper function to determine if it's night time
@@ -2280,48 +2299,75 @@ struct WalkingTrackerView: View {
         let hour = Calendar.current.component(.hour, from: Date())
         return hour < 6 || hour > 18
     }
-    private func walkWeatherHeader() -> some View {
+    private func weatherHeader() -> some View {
         VStack(spacing: 0) {
+            // Top row with location and icon
             HStack {
+                // Location - use locationCity directly and make it forcibly update when it changes
                 HStack(spacing: 4) {
                     Image(systemName: "location.fill")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.7))
+                    
+                    // Use Text with id modifier to force refresh when locationCity changes
                     Text(viewModel.locationCity)
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.white)
+                        .id("location_\(viewModel.locationCity)") // Force redraw when locationCity changes
                 }
+                
                 Spacer()
+                
+                // Weather icon
                 Image(systemName: viewModel.weatherIconName)
                     .font(.system(size: 24))
                     .foregroundColor(.white)
+                    .id("weather-icon-\(viewModel.weatherIconName)") // Force refresh when icon changes
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
+            
+            // Weather condition and temperature (left-aligned now)
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(runStyleWeatherDescription())
+                    Text(getWeatherDescription(condition: viewModel.weatherCondition, isNightMode: isNighttime()))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.white)
-                    Text(viewModel.formatTemperature(viewModel.temperature))
+                        .id("weather-desc-\(viewModel.weatherCondition.rawValue)") // Force refresh
+                    
+                    Text(formatTemperature(viewModel.temperature))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.white)
+                        .id("temperature-\(viewModel.temperature)") // Force refresh when temperature changes
                 }
+                
                 Spacer()
             }
             .padding(.horizontal)
         }
     }
-    private func walkWeatherContent() -> some View {
+    
+    private func weatherContent() -> some View {
         HStack(spacing: 16) {
-            weatherDetailItem(icon: "wind", value: runStyleWindText())
-            weatherDetailItem(icon: "drop.fill", value: "\(Int(viewModel.humidity))%")
+            // Wind
+            weatherDetailItem(
+                icon: "wind",
+                value: formatWindSpeed(viewModel.windSpeed)
+            )
+            
+            // Humidity
+            weatherDetailItem(
+                icon: "drop.fill",
+                value: "\(Int(viewModel.humidity))%"
+            )
         }
+        .padding(.horizontal)
     }
-    private func walkForecastRow() -> some View {
+    
+    private func forecastRow() -> some View {
         HStack(spacing: 10) {
             ForEach(0..<4) { i in
-                walkForecastItem(
+                forecastItem(
                     hour: getHourString(hoursFromNow: i + 1),
                     icon: getForecastIcon(hoursFromNow: i + 1),
                     temp: getForecastTemp(hoursFromNow: i + 1)
@@ -2330,17 +2376,20 @@ struct WalkingTrackerView: View {
         }
         .padding(.horizontal)
     }
-    private func walkForecastItem(hour: String, icon: String, temp: String) -> some View {
+    
+    private func forecastItem(hour: String, icon: String, temp: String) -> some View {
         VStack(spacing: 4) {
             Text(hour)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.white.opacity(0.7))
+            
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.white)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.white)
+                
             Text(temp)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
+                    .foregroundColor(.white)
         }
         .frame(maxWidth: .infinity)
     }
@@ -2388,12 +2437,48 @@ struct WalkingTrackerView: View {
         .background(Color.white.opacity(0.2))
         .cornerRadius(10)
     }
-    private func runStyleWindText() -> String {
+    // Helper method to format wind speed according to user preferences
+    private func formatWindSpeed(_ speed: Double) -> String {
+        return UserPreferences.shared.useMetricSystem ? 
+            "\(Int(speed * 1.60934)) km/h" : 
+            "\(Int(speed)) mph"
+    }
+    
+    private func getWeatherDescription(condition: WeatherCondition, isNightMode: Bool) -> String {
+        switch condition {
+        case .clear:
+            return isNightMode ? "Clear Night" : "Clear Day"
+        case .cloudy:
+            return isNightMode ? "Cloudy Night" : "Cloudy"
+        case .partlyCloudy:
+            return isNightMode ? "Partly Cloudy Night" : "Partly Cloudy"
+        case .rainy:
+            return "Rainy"
+        case .stormy:
+            return "Thunderstorms"
+        case .snowy:
+            return "Snowy"
+        case .foggy:
+            return "Foggy"
+        case .windy:
+            return "Windy"
+        case .unknown:
+            return "Unknown Weather"
+        }
+    }
+    
+    // Helper methods
+    private func formatTemperature(_ temp: Double) -> String {
+        if temp == 0.0 {
+            return UserPreferences.shared.useMetricSystem ? "-- °C" : "-- °F"
+        }
+        
         if UserPreferences.shared.useMetricSystem {
-            return "\(Int(viewModel.windSpeed * 1.0)) km/h"
-        } else {
-            let mph = Int(viewModel.windSpeed * 0.621371)
-            return "\(mph) mph"
+            return "\(Int(round(temp)))°C"
+            } else {
+            // Convert Celsius to Fahrenheit: (C * 9/5) + 32
+            let fahrenheit = (temp * 9/5) + 32
+            return "\(Int(round(fahrenheit)))°F"
         }
     }
     private func runStyleWeatherDescription() -> String {

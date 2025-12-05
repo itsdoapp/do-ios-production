@@ -3815,6 +3815,8 @@ struct BikeTrackerView: View {
                         showRoutePreview = false
                     }
                 )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
         }
     }
@@ -4371,7 +4373,7 @@ struct BikeTrackerView: View {
                         }
                     }
                 case .cloudy:
-                    ModernFogOverlay(nightMode: isNighttime())
+                    CloudOverlay(nightMode: isNighttime())
                 case .rainy:
                     ModernRainOverlay(intensity: .medium, nightMode: isNighttime())
                 case .stormy:
@@ -4384,7 +4386,12 @@ struct BikeTrackerView: View {
                     WindyOverlay(nightMode: isNighttime())
                 case .unknown:
                     // Show a default clear animation instead of empty view to preserve visual continuity
-                    ClearDayView()
+                    // This prevents the animation from disappearing when weather data is temporarily unavailable
+                    if isNighttime() {
+                        StarsView()
+                    } else {
+                        ClearDayView()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -4663,6 +4670,7 @@ struct BikeTrackerView: View {
                 Image(systemName: weatherIconName)
                     .font(.system(size: 24))
                     .foregroundColor(.white)
+                    .id("weather-icon-\(weatherIconName)") // Force refresh when icon changes
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
@@ -4673,10 +4681,12 @@ struct BikeTrackerView: View {
                     Text(getWeatherDescription(condition: weatherCondition, isNightMode: isNighttime()))
                         .font(.system(size: 18, weight: .bold))
                         .foregroundColor(.white)
+                        .id("weather-desc-\(weatherCondition.rawValue)") // Force refresh
                     
                     Text(formatTemperature(temperature))
                         .font(.system(size: 28, weight: .bold))
                         .foregroundColor(.white)
+                        .id("temperature-\(temperature)") // Force refresh when temperature changes
                 }
                 
                 Spacer()
@@ -4735,8 +4745,8 @@ struct BikeTrackerView: View {
     
     // Helper method to format wind speed according to user preferences
     private func formatWindSpeed(_ speed: Double) -> String {
-        return UserPreferences.shared.useMetricSystem ?
-            "\(Int(speed * 1.60934)) km/h" :
+        return UserPreferences.shared.useMetricSystem ? 
+            "\(Int(speed * 1.60934)) km/h" : 
             "\(Int(speed)) mph"
     }
     

@@ -150,6 +150,7 @@ class GenieActionHandler: ObservableObject {
         let duration = durationValue
         
         let focus = action.data["focus"]?.stringValue ?? "stress"
+        let focusCategory = action.data["focusCategory"]?.stringValue ?? focus.capitalized
         let isMotivation = action.data["isMotivation"]?.boolValue ?? false
         let playAudio = action.data["playAudio"]?.boolValue ?? true // Default to true if not specified
         let audioUrl = action.data["audioUrl"]?.stringValue
@@ -223,7 +224,19 @@ class GenieActionHandler: ObservableObject {
         // Show meditation UI (this will display the meditation interface)
         showingMeditation = true
         
+        // Setup lock screen FIRST, before audio starts
+        // This ensures the audio session is configured correctly from the start
+        let meditationTitle = focusCategory + " Meditation"
+        let meditationDuration = TimeInterval(duration * 60)
+        MeditationTrackingService.shared.setupLockScreenForActiveMeditation(
+            title: meditationTitle,
+            duration: meditationDuration,
+            notes: "\(focusCategory) • \(duration) min",
+            focus: focus
+        )
+        
         // Start audio playback now that UI is shown
+        // Lock screen is already set up, so MeditationAudioService will use .default mode
         if playAudio {
             print("🔊 [ActionHandler] Starting meditation audio playback...")
             MeditationAudioService.shared.playMeditationAudio(
@@ -398,6 +411,7 @@ class GenieActionHandler: ObservableObject {
         let firstSectionSets = parseSets(from: action.data["firstSectionSets"])
         let secondSectionSets = parseSets(from: action.data["secondSectionSets"])
         let weavedSets = parseSets(from: action.data["weavedSets"])
+        let templateSets = parseSets(from: action.data["templateSets"])
         
         let workoutAction = WorkoutCreationAction(
             type: .movement,
@@ -414,6 +428,7 @@ class GenieActionHandler: ObservableObject {
             firstSectionSets: firstSectionSets,
             secondSectionSets: secondSectionSets,
             weavedSets: weavedSets,
+            templateSets: templateSets,
             movements: nil,
             isDayOfTheWeekPlan: nil,
             sessions: nil
@@ -462,6 +477,7 @@ class GenieActionHandler: ObservableObject {
                         let firstSectionSets = parseSetsFromDict(movementDict["firstSectionSets"])
                         let secondSectionSets = parseSetsFromDict(movementDict["secondSectionSets"])
                         let weavedSets = parseSetsFromDict(movementDict["weavedSets"])
+                        let templateSets = parseSetsFromDict(movementDict["templateSets"])
                         
                         let movementAction = WorkoutCreationAction(
                             type: .movement,
@@ -478,6 +494,7 @@ class GenieActionHandler: ObservableObject {
                             firstSectionSets: firstSectionSets,
                             secondSectionSets: secondSectionSets,
                             weavedSets: weavedSets,
+                            templateSets: templateSets,
                             movements: nil,
                             isDayOfTheWeekPlan: nil,
                             sessions: nil
@@ -503,6 +520,7 @@ class GenieActionHandler: ObservableObject {
             firstSectionSets: nil,
             secondSectionSets: nil,
             weavedSets: nil,
+            templateSets: nil,
             movements: parsedMovements.isEmpty ? nil : parsedMovements,
             isDayOfTheWeekPlan: nil,
             sessions: nil
@@ -560,6 +578,7 @@ class GenieActionHandler: ObservableObject {
             firstSectionSets: nil,
             secondSectionSets: nil,
             weavedSets: nil,
+            templateSets: nil,
             movements: nil,
             isDayOfTheWeekPlan: isDayOfTheWeekPlan,
             sessions: sessionsMap.isEmpty ? nil : sessionsMap
@@ -1226,6 +1245,7 @@ struct WorkoutCreationAction {
     let firstSectionSets: [[String: Any]]?
     let secondSectionSets: [[String: Any]]?
     let weavedSets: [[String: Any]]?
+    let templateSets: [[String: Any]]?
     
     // Session-specific
     let movements: [WorkoutCreationAction]? // Nested movements

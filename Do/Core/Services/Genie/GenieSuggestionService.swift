@@ -9,14 +9,30 @@ class GenieSuggestionService: ObservableObject {
     
     private init() {}
     
+    // Comprehensive list of 15 general suggestions
+    private let allGeneralSuggestions: [String] = [
+        "Give me a balanced workout for today",
+        "What should I focus on this week?",
+        "Summarize my recent progress",
+        "Create a 4-day strength training plan",
+        "Design a HIIT workout with minimal equipment",
+        "Plan my meals for the week",
+        "Analyze my last workout and suggest improvements",
+        "Recommend a recovery routine for sore muscles",
+        "Help me track my nutrition goals",
+        "Create a meditation session for stress relief",
+        "Suggest exercises for better posture",
+        "Plan a cardio session under 30 minutes",
+        "What muscle groups should I train today?",
+        "Give me tips for better sleep",
+        "Help me set fitness goals for this month"
+    ]
+    
     func loadSuggestions(for context: GenieContext) {
         switch context {
         case .general:
-            suggestions = [
-                "Give me a balanced workout for today",
-                "What should I focus on this week?",
-                "Summarize my recent progress"
-            ]
+            // Randomly select 3 suggestions from the full list
+            suggestions = Array(allGeneralSuggestions.shuffled().prefix(3))
         case .workoutPlanning:
             suggestions = [
                 "Plan a 4-day strength split",

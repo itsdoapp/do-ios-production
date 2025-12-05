@@ -99,7 +99,9 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     
     // Add property to track last location update time
     private var lastProcessedLocationTime: Date = Date.distantPast
+    private var firstLocationTime: Date? // Track when first location was received
     private let locationUpdateThrottleInterval: TimeInterval = 1.0 // seconds
+    private let warmupPeriod: TimeInterval = 10.0 // Accept locations more frequently during first 10 seconds
     
     // Add property to track location failures
     private var locationFailureCount = 0
@@ -308,6 +310,10 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             }
             return
         }
+        
+        // CRITICAL: Reset location tracking state when starting fresh
+        firstLocationTime = nil
+        lastProcessedLocationTime = Date.distantPast
         
         // Ensure delegate is set correctly
         if manager.delegate !== self {
@@ -657,29 +663,47 @@ class ModernLocationManager: NSObject, ObservableObject, CLLocationManagerDelega
                 let now = Date()
                 let timeSinceLastUpdate = now.timeIntervalSince(self.lastProcessedLocationTime)
                 
-                // Accept first location immediately; then accept any accuracy <= 65m within first 10s
-                let isWithinWarmup = now.timeIntervalSince(self.lastProcessedLocationTime) == 0 ? true : (now.timeIntervalSince(self.lastProcessedLocationTime) < 10)
-                
                 print("📍 Location: \(location.coordinate.latitude), \(location.coordinate.longitude)")
                 print("📍 Accuracy: \(location.horizontalAccuracy)m")
                 print("📍 Is first location: \(self.location == nil)")
                 
                 // CRITICAL: Accept first location regardless of accuracy
-                // For subsequent locations, apply accuracy and time filtering
                 let isFirstLocation = self.location == nil
-                let hasGoodAccuracy = location.horizontalAccuracy <= 20 || (isWithinWarmup && location.horizontalAccuracy <= 65)
-                let enoughTimePassed = timeSinceLastUpdate >= self.locationUpdateThrottleInterval
                 
                 if isFirstLocation {
                     print("📍 First location received: accuracy=\(location.horizontalAccuracy)m")
-                    self.lastProcessedLocationTime = now
-                    self.processLocationUpdate(location)
-                } else if hasGoodAccuracy && enoughTimePassed {
-                    print("📍 Subsequent location accepted")
+                    self.firstLocationTime = now
                     self.lastProcessedLocationTime = now
                     self.processLocationUpdate(location)
                 } else {
-                    print("📍 Location rejected: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    // For subsequent locations, check if we're in warmup period
+                    let timeSinceFirstLocation = self.firstLocationTime.map { now.timeIntervalSince($0) } ?? Double.infinity
+                    let isWithinWarmup = timeSinceFirstLocation < self.warmupPeriod
+                    
+                    // During warmup: accept locations with accuracy <= 65m, with relaxed time requirement (0.5s instead of 1s)
+                    // After warmup: accept locations with accuracy <= 20m, with normal time requirement (1s)
+                    let hasGoodAccuracy: Bool
+                    let enoughTimePassed: Bool
+                    
+                    if isWithinWarmup {
+                        // Warmup period: more lenient
+                        hasGoodAccuracy = location.horizontalAccuracy <= 65
+                        enoughTimePassed = timeSinceLastUpdate >= 0.5 // Accept every 0.5s during warmup
+                        print("📍 Warmup period: timeSinceFirst=\(String(format: "%.1f", timeSinceFirstLocation))s, goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    } else {
+                        // Normal operation: stricter
+                        hasGoodAccuracy = location.horizontalAccuracy <= 20
+                        enoughTimePassed = timeSinceLastUpdate >= self.locationUpdateThrottleInterval
+                        print("📍 Normal period: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    }
+                    
+                    if hasGoodAccuracy && enoughTimePassed {
+                        print("📍 Subsequent location accepted")
+                        self.lastProcessedLocationTime = now
+                        self.processLocationUpdate(location)
+                    } else {
+                        print("📍 Location rejected: goodAccuracy=\(hasGoodAccuracy), enoughTime=\(enoughTimePassed)")
+                    }
                 }
             }
         }

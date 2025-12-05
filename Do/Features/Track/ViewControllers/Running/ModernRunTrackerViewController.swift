@@ -3487,29 +3487,6 @@ struct RunTrackerView: View {
             // Subscribe to route change notifications
             setupRouteChangeNotifications()
         }
-        .sheet(isPresented: $showingCategorySelector) {
-            CategorySelectorView(
-                isPresented: $showingCategorySelector,
-                selectedCategory: Binding(
-                    get: { self.selectedCategoryIndex },
-                    set: { newIndex in
-                        print("🎯 CategorySelectorView selected index: \(newIndex)")
-                        // Directly update UI state
-                        self.selectedCategoryIndex = newIndex
-                        // Close the sheet first
-                        self.showingCategorySelector = false
-                        // Use a delay before triggering the navigation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            // Call the delegate directly for navigation
-                            viewModel.categoryDelegate?.didSelectCategory(at: newIndex)
-                        }
-                    }
-                ),
-                categories: Array(zip(categoryTitles, categoryIcons)).map { ($0.0, $0.1) }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
     }
     
     // Add method to initialize the selected category
@@ -4220,6 +4197,8 @@ struct RunTrackerView: View {
                         showRoutePreview = false
                     }
                 )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
             }
         }
     }

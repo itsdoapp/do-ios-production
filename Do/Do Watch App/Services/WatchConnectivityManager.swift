@@ -151,6 +151,20 @@ extension WatchConnectivityManager: WCSessionDelegate {
                         object: nil,
                         userInfo: message
                     )
+                case "gymSetsUpdate":
+                    // Handle sets update from phone
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("GymSetsUpdate"),
+                        object: nil,
+                        userInfo: message
+                    )
+                case "gymMetrics":
+                    // Handle real-time metrics update from phone
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("GymMetricsUpdate"),
+                        object: nil,
+                        userInfo: message
+                    )
                 case "authTokens":
                     NotificationCenter.default.post(
                         name: NSNotification.Name("WatchAuthStateChanged"),
@@ -199,6 +213,12 @@ extension WatchConnectivityManager: WCSessionDelegate {
                     self.handleWorkoutHandoff(applicationContext)
                 case "workoutMetrics":
                     self.handleWorkoutMetrics(applicationContext)
+                case "trackingStatus":
+                    // Handle tracking status from phone - check for active workout
+                    self.handleTrackingStatus(applicationContext)
+                case "workoutUpdate":
+                    // Handle workout update messages (includes coordination flags)
+                    self.handleWorkoutUpdate(applicationContext)
                 case "authTokens":
                     NotificationCenter.default.post(
                         name: NSNotification.Name("WatchAuthStateChanged"),
@@ -206,7 +226,24 @@ extension WatchConnectivityManager: WCSessionDelegate {
                         userInfo: applicationContext
                     )
                 default:
+                    // Check if this is an active workout even without a recognized type
+                    if let hasActiveWorkout = applicationContext["hasActiveWorkout"] as? Bool,
+                       hasActiveWorkout,
+                       let workoutActive = applicationContext["workoutActive"] as? Bool,
+                       workoutActive {
+                        print("⌚️ [WatchConnectivityManager] Detected active workout in application context")
+                        self.handleTrackingStatus(applicationContext)
+                    }
                     break
+                }
+            } else {
+                // No type specified - check for active workout indicators
+                if let hasActiveWorkout = applicationContext["hasActiveWorkout"] as? Bool,
+                   hasActiveWorkout,
+                   let workoutActive = applicationContext["workoutActive"] as? Bool,
+                   workoutActive {
+                    print("⌚️ [WatchConnectivityManager] Detected active workout in application context (no type)")
+                    self.handleTrackingStatus(applicationContext)
                 }
             }
         }
@@ -246,6 +283,97 @@ extension WatchConnectivityManager: WCSessionDelegate {
         }
     }
     
+    private func handleTrackingStatus(_ message: [String: Any]) {
+        // Handle tracking status from phone - check for active workout
+        let hasActiveWorkout = (message["hasActiveWorkout"] as? Bool) ?? (message["workoutActive"] as? Bool) ?? false
+        
+        if hasActiveWorkout {
+            print("⌚️ [WatchConnectivityManager] Active phone workout detected in tracking status")
+            
+            // Extract workout data
+            var workoutData: [String: Any] = [:]
+            workoutData["workoutActive"] = true
+            workoutData["hasActiveWorkout"] = true
+            
+            // Extract workout type
+            if let workoutType = message["workoutType"] as? String {
+                workoutData["workoutType"] = workoutType
+            } else if let runType = message["runType"] as? String {
+                // Convert runType to workoutType
+                workoutData["workoutType"] = "running"
+                workoutData["runType"] = runType
+            }
+            
+            // Extract state
+            if let state = message["state"] as? String {
+                workoutData["state"] = state
+            } else if let runState = message["runState"] as? String {
+                // Convert runState to state
+                let state = (runState == "running") ? "inProgress" : (runState == "paused" ? "paused" : "notStarted")
+                workoutData["state"] = state
+                workoutData["runState"] = runState
+            }
+            
+            // Extract metrics
+            if let metrics = message["metrics"] as? [String: Any] {
+                workoutData["metrics"] = metrics
+            } else {
+                // Build metrics from individual fields
+                var metrics: [String: Any] = [:]
+                if let distance = message["distance"] as? Double {
+                    metrics["distance"] = distance
+                }
+                if let elapsedTime = message["elapsedTime"] as? TimeInterval {
+                    metrics["elapsedTime"] = elapsedTime
+                }
+                if let pace = message["pace"] as? Double {
+                    metrics["pace"] = pace
+                }
+                if let heartRate = message["heartRate"] as? Double {
+                    metrics["heartRate"] = heartRate
+                }
+                if let calories = message["calories"] as? Double {
+                    metrics["calories"] = calories
+                }
+                if let cadence = message["cadence"] as? Double {
+                    metrics["cadence"] = cadence
+                }
+                if !metrics.isEmpty {
+                    workoutData["metrics"] = metrics
+                }
+            }
+            
+            // Extract workout ID
+            if let id = message["id"] as? String {
+                workoutData["id"] = id
+            } else if let workoutId = message["workoutId"] as? String {
+                workoutData["id"] = workoutId
+            }
+            
+            // Extract other useful info
+            if let isIndoor = message["isIndoor"] as? Bool {
+                workoutData["isIndoor"] = isIndoor
+            } else if let isIndoorMode = message["isIndoorMode"] as? Bool {
+                workoutData["isIndoor"] = isIndoorMode
+            }
+            
+            // Post notification for WorkoutListView to handle
+            NotificationCenter.default.post(
+                name: NSNotification.Name("PhoneWorkoutUpdate"),
+                object: nil,
+                userInfo: workoutData
+            )
+            print("⌚️ [WatchConnectivityManager] Posted PhoneWorkoutUpdate notification with workout data")
+        } else {
+            // No active workout - clear it
+            NotificationCenter.default.post(
+                name: NSNotification.Name("PhoneWorkoutUpdate"),
+                object: nil,
+                userInfo: ["workoutActive": false, "hasActiveWorkout": false]
+            )
+        }
+    }
+    
     private func handleWorkoutUpdate(_ message: [String: Any]) {
         // Handle workoutUpdate messages from phone (includes coordination flags)
         if let metrics = message["metrics"] as? [String: Any] {
@@ -274,6 +402,12 @@ extension WatchConnectivityManager: WCSessionDelegate {
                     userInfo: mergedMetrics.toDictionary()
                 )
             }
+        }
+        
+        // Also check if this is an active workout update and notify
+        let hasActiveWorkout = (message["hasActiveWorkout"] as? Bool) ?? (message["workoutActive"] as? Bool) ?? false
+        if hasActiveWorkout {
+            handleTrackingStatus(message)
         }
     }
     

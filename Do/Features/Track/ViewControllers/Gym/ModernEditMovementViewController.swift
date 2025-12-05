@@ -199,12 +199,28 @@ struct EditMovementView: View {
                                 ),
                                 icon: "text.alignleft"
                             )
+                            
+                            ModernToggle(
+                                title: "Equipment Needed",
+                                icon: "wrench.and.screwdriver.fill",
+                                isOn: Binding(
+                                    get: { !(draftMovement.equipmentsNeeded?.isEmpty ?? true) },
+                                    set: { draftMovement.equipmentsNeeded = $0 ? ["Equipment needed"] : [] }
+                                )
+                            )
                         }
                     }
+                    .padding(.horizontal, 20)
+                    
+                    // Sets Management Section
+                    SetsManagementSection(
+                        draftMovement: $draftMovement
+                    )
                     .padding(.horizontal, 20)
                     .padding(.bottom, 40)
                 }
                 .padding(.vertical, 20)
+                .padding(.bottom, 100) // Extra padding for save button
             }
             
             // Save Button (fixed at bottom)
@@ -295,12 +311,15 @@ struct EditMovementView: View {
         
         isSaving = true
         
-        // Convert sets to dictionaries
+        // Convert sets to dictionaries - include both "duration" and "sec" for timed sets
         let firstSectionSets = draftMovement.firstSectionSets?.map { set -> [String: Any] in
             var dict: [String: Any] = ["id": set.id]
             if let reps = set.reps { dict["reps"] = reps }
             if let weight = set.weight { dict["weight"] = weight }
-            if let duration = set.duration { dict["duration"] = duration }
+            if let duration = set.duration {
+                dict["duration"] = duration
+                dict["sec"] = duration // Also include "sec" for compatibility
+            }
             return dict
         } ?? []
         
@@ -308,7 +327,10 @@ struct EditMovementView: View {
             var dict: [String: Any] = ["id": set.id]
             if let reps = set.reps { dict["reps"] = reps }
             if let weight = set.weight { dict["weight"] = weight }
-            if let duration = set.duration { dict["duration"] = duration }
+            if let duration = set.duration {
+                dict["duration"] = duration
+                dict["sec"] = duration
+            }
             return dict
         } ?? []
         
@@ -316,7 +338,21 @@ struct EditMovementView: View {
             var dict: [String: Any] = ["id": set.id]
             if let reps = set.reps { dict["reps"] = reps }
             if let weight = set.weight { dict["weight"] = weight }
-            if let duration = set.duration { dict["duration"] = duration }
+            if let duration = set.duration {
+                dict["duration"] = duration
+                dict["sec"] = duration
+            }
+            return dict
+        } ?? []
+        
+        let templateSets = draftMovement.templateSets?.map { set -> [String: Any] in
+            var dict: [String: Any] = ["id": set.id]
+            if let reps = set.reps { dict["reps"] = reps }
+            if let weight = set.weight { dict["weight"] = weight }
+            if let duration = set.duration {
+                dict["duration"] = duration
+                dict["sec"] = duration // Also include "sec" for compatibility
+            }
             return dict
         } ?? []
         
@@ -336,6 +372,7 @@ struct EditMovementView: View {
                 equipmentsNeeded: !(draftMovement.equipmentsNeeded?.isEmpty ?? true),
                 description: draftMovement.description,
                 tags: draftMovement.tags ?? [],
+                templateSets: templateSets,
                 firstSectionSets: firstSectionSets,
                 secondSectionSets: secondSectionSets,
                 weavedSets: weavedSets
@@ -368,6 +405,7 @@ struct EditMovementView: View {
                 equipmentsNeeded: !(draftMovement.equipmentsNeeded?.isEmpty ?? true),
                 description: draftMovement.description,
                 tags: draftMovement.tags ?? [],
+                templateSets: templateSets,
                 firstSectionSets: firstSectionSets,
                 secondSectionSets: secondSectionSets,
                 weavedSets: weavedSets
@@ -447,6 +485,317 @@ struct ModernToggle: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Sets Management Section
+
+struct SetsManagementSection: View {
+    @Binding var draftMovement: movement
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Sets Configuration")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.white.opacity(0.9))
+                .padding(.horizontal, 20)
+            
+            if draftMovement.isSingle {
+                // Single Movement: Use templateSets or firstSectionSets
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Sets")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white.opacity(0.8))
+                        .padding(.horizontal, 20)
+                    
+                    SetsManagementView(
+                        sets: Binding(
+                            get: { draftMovement.templateSets ?? draftMovement.firstSectionSets ?? [] },
+                            set: { newSets in
+                                if newSets.isEmpty {
+                                    draftMovement.templateSets = nil
+                                    draftMovement.firstSectionSets = nil
+                                } else {
+                                    // Prefer templateSets for single movements
+                                    draftMovement.templateSets = newSets
+                                    draftMovement.firstSectionSets = nil
+                                }
+                            }
+                        ),
+                        isTimed: draftMovement.isTimed,
+                        sectionName: "Sets"
+                    )
+                }
+            } else {
+                // Compound Movement: Use firstSectionSets, secondSectionSets, and weavedSets
+                VStack(alignment: .leading, spacing: 16) {
+                    // First Movement Sets
+                    if let movement1Name = draftMovement.movement1Name {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text(movement1Name)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.8))
+                                Spacer()
+                            }
+                            .padding(.horizontal, 20)
+                            
+                            SetsManagementView(
+                                sets: Binding(
+                                    get: { draftMovement.firstSectionSets ?? [] },
+                                    set: { draftMovement.firstSectionSets = $0.isEmpty ? nil : $0 }
+                                ),
+                                isTimed: draftMovement.isTimed,
+                                sectionName: movement1Name
+                            )
+                        }
+                    }
+                    
+                    // Second Movement Sets
+                    if let movement2Name = draftMovement.movement2Name {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text(movement2Name)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.8))
+                                Spacer()
+                            }
+                            .padding(.horizontal, 20)
+                            
+                            SetsManagementView(
+                                sets: Binding(
+                                    get: { draftMovement.secondSectionSets ?? [] },
+                                    set: { draftMovement.secondSectionSets = $0.isEmpty ? nil : $0 }
+                                ),
+                                isTimed: draftMovement.isTimed,
+                                sectionName: movement2Name
+                            )
+                        }
+                    }
+                    
+                    // Weaved Sets (alternating between movements)
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.white.opacity(0.6))
+                                Text("Weaved Sets")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.8))
+                                Spacer()
+                            }
+                            
+                            Text("Alternate between \(draftMovement.movement1Name ?? "Movement 1") and \(draftMovement.movement2Name ?? "Movement 2")")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.5))
+                                .italic()
+                        }
+                        .padding(.horizontal, 20)
+                        
+                        SetsManagementView(
+                            sets: Binding(
+                                get: { draftMovement.weavedSets ?? [] },
+                                set: { draftMovement.weavedSets = $0.isEmpty ? nil : $0 }
+                            ),
+                            isTimed: draftMovement.isTimed,
+                            sectionName: "Weaved Sets"
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Sets Management View
+
+struct SetsManagementView: View {
+    @Binding var sets: [set]
+    let isTimed: Bool
+    let sectionName: String
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Sets List
+            if sets.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 24))
+                        .foregroundColor(.white.opacity(0.3))
+                    Text("No sets added yet")
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 30)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(12)
+                .padding(.horizontal, 20)
+            } else {
+                ForEach(Array(sets.enumerated()), id: \.element.id) { index, setItem in
+                    EditableSetRowView(
+                        setItem: Binding(
+                            get: { sets[index] },
+                            set: { sets[index] = $0 }
+                        ),
+                        isTimed: isTimed,
+                        setNumber: index + 1,
+                        onDelete: {
+                            sets.remove(at: index)
+                        }
+                    )
+                    .padding(.horizontal, 20)
+                }
+            }
+            
+            // Add Set Button
+            Button(action: {
+                var newSet = set()
+                newSet.id = UUID().uuidString
+                if isTimed {
+                    newSet.duration = 60 // Default 60 seconds
+                } else {
+                    newSet.reps = 10 // Default 10 reps
+                }
+                sets.append(newSet)
+            }) {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 16))
+                    Text("Add Set")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+}
+
+struct EditableSetRowView: View {
+    @Binding var setItem: set
+    let isTimed: Bool
+    var setNumber: Int? = nil
+    let onDelete: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            // Set Number Badge (more compact)
+            if let setNumber = setNumber {
+                Text("\(setNumber)")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle()
+                            .fill(Color.white.opacity(0.15))
+                    )
+            }
+            
+            // Reps or Duration - more compact layout
+            if isTimed {
+                HStack(spacing: 8) {
+                    Image(systemName: "timer")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.7))
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Duration")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.5))
+                        TextField("60", value: $setItem.duration, format: .number)
+                            .keyboardType(.numberPad)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 60)
+                    }
+                    
+                    Text("sec")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(8)
+                .frame(maxWidth: .infinity)
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "repeat")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.7))
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Reps")
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.5))
+                        TextField("10", value: $setItem.reps, format: .number)
+                            .keyboardType(.numberPad)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 50)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(8)
+                .frame(maxWidth: .infinity)
+            }
+            
+            // Weight - more compact
+            HStack(spacing: 8) {
+                Image(systemName: "dumbbell.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.7))
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Weight")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.5))
+                    TextField("0", value: $setItem.weight, format: .number)
+                        .keyboardType(.decimalPad)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 50)
+                }
+                
+                Text("lbs")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.6))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.1))
+            .cornerRadius(8)
+            .frame(maxWidth: .infinity)
+            
+            // Delete Button
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+                    .font(.system(size: 14))
+                    .foregroundColor(.red.opacity(0.8))
+                    .frame(width: 36, height: 36)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(8)
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
     }
 }

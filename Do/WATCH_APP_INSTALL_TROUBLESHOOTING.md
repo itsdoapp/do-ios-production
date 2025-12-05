@@ -189,3 +189,6 @@ The watch app needs to be built and signed before it can be installed. Building 
 Check Xcode console for the specific error message - that will tell us exactly what's wrong!
 
 
+
+
+

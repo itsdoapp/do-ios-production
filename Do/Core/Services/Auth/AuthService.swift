@@ -56,16 +56,28 @@ class AuthService: ObservableObject {
             legacyUser.userID = userId
             legacyUser.userName = UserDefaults.standard.string(forKey: "username")
             legacyUser.email = UserDefaults.standard.string(forKey: "email")
+            legacyUser.name = UserDefaults.standard.string(forKey: "name")
+            legacyUser.bio = UserDefaults.standard.string(forKey: "bio")
             
             print("🔐 [AuthService] Loading basic user: userID=\(userId), userName=\(legacyUser.userName ?? "nil")")
             CurrentUserService.shared.updateUser(legacyUser)
             print("🔐 [AuthService] Loaded basic user data to CurrentUserService (userID: \(userId))")
             
-            // Fetch full user profile in background
-            Task {
-                print("🔐 [AuthService] Starting background profile fetch...")
-                await fetchOrCreateUserProfile(userId: userId)
-                print("🔐 [AuthService] Background profile fetch complete")
+            // Check if we already have complete profile data before fetching
+            let hasCompleteProfile = legacyUser.userName != nil && 
+                                    legacyUser.email != nil && 
+                                    !legacyUser.userName!.isEmpty
+            
+            // Only fetch if we don't have complete profile data
+            if !hasCompleteProfile {
+                // Fetch full user profile in background
+                Task {
+                    print("🔐 [AuthService] Starting background profile fetch (incomplete profile data)...")
+                    await fetchOrCreateUserProfile(userId: userId)
+                    print("🔐 [AuthService] Background profile fetch complete")
+                }
+            } else {
+                print("📦 [AuthService] Using cached profile data, skipping fetch")
             }
         } else {
             print("🔐 [AuthService] No valid auth found in keychain, user not authenticated")
@@ -308,41 +320,99 @@ class AuthService: ObservableObject {
             return
         }
         
-        do {
-            // Lambda will handle cognitoSub lookup automatically
-            let user = try await UserService.shared.getUser(userId: userId)
+        // Check ProfileViewModel cache first
+        let cacheKey = userId
+        if let cached = ProfileViewModel.getCachedProfile(for: cacheKey), !cached.isExpired {
+            print("📦 [AuthService] Using cached profile from ProfileViewModel")
             await MainActor.run {
-                self.currentUser = user
+                var legacyUser = cached.profile
+                CurrentUserService.shared.updateUser(legacyUser)
+                
+                // Save to UserDefaults for quick access
+                UserDefaults.standard.set(legacyUser.userName, forKey: "username")
+                UserDefaults.standard.set(legacyUser.email, forKey: "email")
+                UserDefaults.standard.set(legacyUser.name, forKey: "name")
+                UserDefaults.standard.set(legacyUser.bio, forKey: "bio")
+                
+                print("✅ [AuthService] Synced cached user to CurrentUserService: \(legacyUser.userName ?? "unknown")")
+            }
+            return
+        }
+        
+        do {
+            // Use ProfileAPIService instead of UserService (newer Lambda-based API)
+            // Try all user IDs (Parse ID first, then Cognito ID)
+            let userIdsToTry = UserIDResolver.shared.getUserIdsForDataFetch()
+            
+            var profileResponse: UserProfileResponse?
+            var lastError: Error?
+            
+            for userIdToTry in userIdsToTry {
+                do {
+                    print("🌐 [AuthService] Trying to fetch profile with user ID: \(userIdToTry)")
+                    let response = try await ProfileAPIService.shared.fetchUserProfile(
+                        userId: userIdToTry,
+                        currentUserId: userIdToTry,
+                        includeFollowers: false,
+                        includeFollowing: false
+                    )
+                    profileResponse = response
+                    print("✅ [AuthService] Successfully fetched profile using user ID: \(userIdToTry)")
+                    break
+                } catch {
+                    print("⚠️ [AuthService] Error fetching profile with user ID \(userIdToTry): \(error.localizedDescription)")
+                    lastError = error
+                    // Continue to next user ID
+                }
+            }
+            
+            guard let profileResponse = profileResponse, let userData = profileResponse.data?.user else {
+                // Check if it's a 404 (user not found) before trying to create
+                if let networkError = lastError as? NetworkError,
+                   case .httpError(let statusCode, _) = networkError, statusCode == 404 {
+                    print("⚠️ [AuthService] User profile not found (404), creating... (retryCount: \(retryCount))")
+                    await createUserProfile(userId: userId, retryCount: retryCount + 1)
+                } else {
+                    print("⚠️ [AuthService] Error fetching user profile: \(lastError?.localizedDescription ?? "unknown") - not a 404, using cached data if available")
+                    // Don't try to create if it's not a 404 - user might already exist
+                    // Use cached data from CurrentUserService if available
+                }
+                return
+            }
+            
+            await MainActor.run {
+                // Convert ProfileAPIUser to UserModel
+                var legacyUser = UserModel()
+                legacyUser.userID = userData.userId
+                legacyUser.userName = userData.username ?? ""
+                legacyUser.email = userData.email
+                legacyUser.name = userData.name
+                legacyUser.bio = userData.bio
+                legacyUser.profilePictureUrl = userData.profilePictureUrl
+                legacyUser.privacyToggle = userData.privacyToggle
                 
                 // Save to UserDefaults for quick access on next launch
-                UserDefaults.standard.set(user.username, forKey: "username")
-                UserDefaults.standard.set(user.email, forKey: "email")
-                UserDefaults.standard.set(user.name, forKey: "name")
+                UserDefaults.standard.set(legacyUser.userName, forKey: "username")
+                UserDefaults.standard.set(legacyUser.email, forKey: "email")
+                UserDefaults.standard.set(legacyUser.name, forKey: "name")
+                UserDefaults.standard.set(legacyUser.bio, forKey: "bio")
                 
-                // Sync to CurrentUserService for legacy code
-                var legacyUser = UserModel()
-                legacyUser.userID = user.id
-                legacyUser.userName = user.username
-                legacyUser.email = user.email
-                legacyUser.name = user.name
-                legacyUser.profilePictureUrl = user.profilePictureUrl
+                // Sync to CurrentUserService
                 CurrentUserService.shared.updateUser(legacyUser)
-                print("✅ [AuthService] Synced user to CurrentUserService: \(user.username)")
+                print("✅ [AuthService] Synced user to CurrentUserService: \(legacyUser.userName ?? "unknown")")
+                
+                // Cache in ProfileViewModel for future use
+                ProfileViewModel.cacheProfile(
+                    user: legacyUser,
+                    followerCount: profileResponse.data?.followerCount ?? 0,
+                    followingCount: profileResponse.data?.followingCount ?? 0,
+                    isCurrentUser: true
+                )
             }
-            print("✅ [AuthService] User profile loaded")
-        } catch let error as APIError {
-            // Check if it's a 404 (user not found) before trying to create
-            if case .serverError(let statusCode) = error, statusCode == 404 {
-                print("⚠️ [AuthService] User profile not found (404), creating... (retryCount: \(retryCount))")
-                // Increment retryCount to track the attempt and maintain symmetry with createUserProfile's retry logic
-                await createUserProfile(userId: userId, retryCount: retryCount + 1)
-            } else {
-                print("⚠️ [AuthService] Error fetching user profile: \(error) - not a 404, skipping creation")
-                // Don't try to create if it's not a 404 - user might already exist
-            }
+            print("✅ [AuthService] User profile loaded and cached")
         } catch {
-            print("⚠️ [AuthService] Unexpected error fetching user profile: \(error)")
-            // Only try to create if we're sure it's a "not found" scenario
+            print("⚠️ [AuthService] Unexpected error fetching user profile: \(error.localizedDescription)")
+            // Use cached data from CurrentUserService if available - don't fail completely
         }
     }
     

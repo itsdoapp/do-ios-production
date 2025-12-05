@@ -46,3 +46,6 @@ Try running both apps now:
 If it still doesn't work, the issue is that Xcode's Run action **always installs** the app, and installation kills running instances. This is a simulator limitation that can't be worked around with build settings alone.
 
 
+
+
+

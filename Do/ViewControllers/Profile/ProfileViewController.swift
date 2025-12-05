@@ -1,76 +1,85 @@
 import UIKit
+import SwiftUI
 
 final class Profile: UIViewController {
     var selectedProfile: UserModel? {
-        didSet { configure() }
+        didSet { 
+            configure() 
+        }
     }
     
-    private let nameLabel = UILabel()
-    private let usernameLabel = UILabel()
-    private let emailLabel = UILabel()
-    private let dismissButton = UIButton(type: .system)
+    private var hostingController: UIHostingController<AnyView>?
+    private var profileView: ProfileView?
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(red: 0.06, green: 0.09, blue: 0.24, alpha: 1)
-        setupViews()
         configure()
     }
     
-    private func setupViews() {
-        nameLabel.font = UIFont.systemFont(ofSize: 24, weight: .bold)
-        nameLabel.textColor = .white
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        
-        usernameLabel.font = UIFont.systemFont(ofSize: 18, weight: .semibold)
-        usernameLabel.textColor = UIColor.white.withAlphaComponent(0.8)
-        usernameLabel.translatesAutoresizingMaskIntoConstraints = false
-        
-        emailLabel.font = UIFont.systemFont(ofSize: 16, weight: .regular)
-        emailLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        emailLabel.translatesAutoresizingMaskIntoConstraints = false
-        emailLabel.numberOfLines = 0
-        
-        dismissButton.setTitle("Close", for: .normal)
-        dismissButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .semibold)
-        dismissButton.tintColor = .white
-        dismissButton.backgroundColor = UIColor.systemOrange.withAlphaComponent(0.3)
-        dismissButton.layer.cornerRadius = 12
-        dismissButton.contentEdgeInsets = UIEdgeInsets(top: 12, left: 24, bottom: 12, right: 24)
-        dismissButton.translatesAutoresizingMaskIntoConstraints = false
-        dismissButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        
-        view.addSubview(nameLabel)
-        view.addSubview(usernameLabel)
-        view.addSubview(emailLabel)
-        view.addSubview(dismissButton)
-        
-        NSLayoutConstraint.activate([
-            nameLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 32),
-            nameLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
-            nameLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
-            
-            usernameLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 12),
-            usernameLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            usernameLabel.trailingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
-            
-            emailLabel.topAnchor.constraint(equalTo: usernameLabel.bottomAnchor, constant: 8),
-            emailLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            emailLabel.trailingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
-            
-            dismissButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -32),
-            dismissButton.centerXAnchor.constraint(equalTo: view.centerXAnchor)
-        ])
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Ensure selectedProfile is set before view appears
+        if let selectedProfile = selectedProfile {
+            print("👤 [ProfileVC] viewWillAppear - selectedProfile: \(selectedProfile.userID ?? "nil"), userName: \(selectedProfile.userName ?? "nil")")
+        }
     }
     
     private func configure() {
-        let profile = selectedProfile ?? CurrentUserService.shared.user
-        nameLabel.text = profile.name ?? "Profile"
-        usernameLabel.text = "@" + (profile.userName ?? "username")
-        emailLabel.text = profile.email ?? ""
+        // Remove existing hosting controller if any
+        hostingController?.willMove(toParent: nil)
+        hostingController?.view.removeFromSuperview()
+        hostingController?.removeFromParent()
+        hostingController = nil
+        
+        // Get the user to display - prioritize selectedProfile, fallback to current user
+        let userToDisplay: UserModel
+        let isCurrentUser: Bool
+        
+        if let selectedProfile = selectedProfile {
+            userToDisplay = selectedProfile
+            // Check if selected profile is the current user
+            let currentUserId = AWSCognitoAuth.shared.getCurrentUserId() ?? CurrentUserService.shared.userID
+            isCurrentUser = (selectedProfile.userID == currentUserId) || 
+                           (selectedProfile.userName == CurrentUserService.shared.userName)
+            print("👤 [ProfileVC] Configuring with selectedProfile")
+            print("   - userID: \(userToDisplay.userID ?? "nil")")
+            print("   - userName: \(userToDisplay.userName ?? "nil")")
+            print("   - currentUserId: \(currentUserId ?? "nil")")
+            print("   - isCurrentUser: \(isCurrentUser)")
+            print("   - This should load posts for: \(userToDisplay.userID ?? userToDisplay.userName ?? "unknown")")
+        } else {
+            userToDisplay = CurrentUserService.shared.user
+            isCurrentUser = true
+            print("👤 [ProfileVC] No selectedProfile, using current user: \(userToDisplay.userID ?? "nil"), userName: \(userToDisplay.userName ?? "nil")")
+        }
+        
+        // Create ProfileView with the user (always provide dismiss callback for modal presentation)
+        let profileView = ProfileView(
+            user: userToDisplay, 
+            showsDismissButton: true, 
+            onDismiss: { [weak self] in
+                self?.dismiss(animated: true)
+            }
+        )
+        self.profileView = profileView
+        
+        setupHostingController(with: profileView)
     }
     
-    @objc private func closeTapped() {
-        dismiss(animated: true)
+    private func setupHostingController(with profileView: ProfileView) {
+        // Create hosting controller with type erasure
+        let host = UIHostingController(rootView: AnyView(profileView))
+        hostingController = host
+        
+        addChild(host)
+        view.addSubview(host.view)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        host.didMove(toParent: self)
     }
 }

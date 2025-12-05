@@ -463,7 +463,7 @@ struct OutdoorRunTrackerView: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 45, height: 45)
             
-            Text(viewModel.runType.rawValue)
+            Text(viewModel.runType.displayName)
                 .font(.title2)
                 .fontWeight(.bold)
                     .foregroundColor(.white)
@@ -1300,6 +1300,9 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
         // Setup workout communication
         setupWorkoutCommunication()
         
+        // Setup watch connectivity - MUST be called early to ensure WCSession is activated
+        setupWatchConnectivity()
+        
         // Configure map view
         setupMapView()
         
@@ -1332,6 +1335,14 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
         
         // Add observers for app state changes to ensure continuous tracking
         setupAppStateHandling()
+        
+        // Listen for profile image updates to refresh avatar
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleCurrentUserUpdated),
+            name: NSNotification.Name("CurrentUserUpdated"),
+            object: nil
+        )
         
         // Set up notification for return route dismissal
            NotificationCenter.default.addObserver(
@@ -1690,6 +1701,23 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
     }
     
     // Handle watch connectivity changes
+    @objc private func handleCurrentUserUpdated(_ notification: Notification) {
+        // Refresh the avatar annotation when profile image is updated
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Force map view to refresh the user location annotation by removing and re-adding
+            // This will trigger mapView(_:viewFor:) to be called again with the updated profile image
+            let userLocation = self.mapView.userLocation
+            self.mapView.removeAnnotation(userLocation)
+            // Small delay to ensure removal is processed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.mapView.addAnnotation(userLocation)
+                print("📱 ✅ Refreshed avatar annotation after profile image update")
+            }
+        }
+    }
+    
     @objc public func handleWatchConnectivityChanged(_ notification: Notification) {
         guard let isReachable = notification.userInfo?["isReachable"] as? Bool else { return }
         
@@ -2007,15 +2035,39 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
     }
     
     public func setupWatchConnectivity() {
-        if WCSession.isSupported() {
-            let session = WCSession.default
-            session.delegate = self
-            session.activate()
-            self.session = session
-            
-            // Initial check for watch reachability
-            self.isWatchConnected = session.isReachable
+        guard WCSession.isSupported() else {
+            print("📱 WCSession not supported on this device")
+            return
         }
+        
+        let session = WCSession.default
+        
+        // Only set delegate if not already set or if it's different
+        // This prevents conflicts with RunTrackingEngine's delegate setup
+        if session.delegate !== self {
+            print("📱 Setting OutdoorRunViewController as WCSession delegate")
+            session.delegate = self
+        }
+        
+        // Activate session if not already activated
+        if session.activationState != .activated {
+            print("📱 Activating WCSession...")
+            session.activate()
+        } else {
+            print("📱 WCSession already activated")
+        }
+        
+        self.session = session
+        
+        // Initial check for watch reachability
+        self.isWatchConnected = session.isReachable
+        
+        // Log session state for debugging
+        print("📱 WCSession setup complete:")
+        print("   - Activation state: \(session.activationState.rawValue)")
+        print("   - Is paired: \(session.isPaired)")
+        print("   - Watch app installed: \(session.isWatchAppInstalled)")
+        print("   - Is reachable: \(session.isReachable)")
     }
     
     public func setupMetricsCoordinator() {
@@ -6826,12 +6878,46 @@ class OutdoorRunViewController: UIViewController, CLLocationManagerDelegate, MKM
             "state": runEngine.runState == .running ? "inProgress" : runEngine.runState.rawValue,
             "metrics": metrics,
             "workoutActive": runEngine.runState == .running || runEngine.runState == .paused,
+            "hasActiveWorkout": runEngine.runState == .running || runEngine.runState == .paused,
+            "workoutType": "running",
+            "runType": runType.rawValue,
+            "workoutId": runEngine.workoutId.uuidString,
             "isIndoor": runEngine.isIndoorMode,
             "watchTracking": runEngine.isWatchTracking,
-            "useImperialUnits": !UserPreferences.shared.useMetricSystem
+            "useImperialUnits": !UserPreferences.shared.useMetricSystem,
+            // Add coordination flags
+            "isPrimaryForDistance": runEngine.isPrimaryForDistance,
+            "isPrimaryForPace": runEngine.isPrimaryForPace,
+            "isPrimaryForHeartRate": runEngine.isPrimaryForHeartRate,
+            "isPrimaryForCalories": runEngine.isPrimaryForCalories,
+            "isPrimaryForCadence": runEngine.isPrimaryForCadence,
+            "hasGoodLocationData": runEngine.hasGoodLocationData
         ]
         
         print("📱 Sending status to watch: state=\(runEngine.runState.rawValue), time=\(runEngine.elapsedTime)s, distance=\(runEngine.distance.value)m")
+        
+        // Update application context so watch can discover active workout even when app isn't running
+        if runEngine.runState == .running || runEngine.runState == .paused {
+            let session = WCSession.default
+            // Only update if session is activated
+            guard session.activationState == .activated else {
+                print("⚠️ Cannot update application context - WCSession not activated (state: \(session.activationState.rawValue))")
+                return
+            }
+            
+            do {
+                try session.updateApplicationContext(status)
+                print("📱 ✅ Updated application context with active workout info")
+            } catch {
+                let nsError = error as NSError
+                print("⚠️ Failed to update application context: \(error.localizedDescription)")
+                print("   Error code: \(nsError.code), domain: \(nsError.domain)")
+                // Don't fail silently - this is important for watch coordination
+                if nsError.code == 7018 {
+                    print("   ⚠️ Watch thinks companion app is not installed - may need to restart watch app")
+                }
+            }
+        }
         
         // Use non-blocking communication with a safer approach
         DispatchQueue.global(qos: .utility).async {
@@ -7402,6 +7488,8 @@ extension OutdoorRunViewController {
                 annotationView?.frame = CGRect(x: 0, y: 0, width: 40, height: 40)
             } else {
                 annotationView?.annotation = annotation
+                // Remove existing subviews when reusing to prevent duplicates
+                annotationView?.subviews.forEach { $0.removeFromSuperview() }
             }
             
             // Create an outer shadow container that doesn't clip
@@ -7419,11 +7507,62 @@ extension OutdoorRunViewController {
             profileImageView.clipsToBounds = true  // This ensures proper circular clipping
             profileImageView.layer.borderWidth = 3
             profileImageView.layer.borderColor = UIColor.white.cgColor
+            profileImageView.tag = 999 // Tag for easy identification
 
-            // Get profile picture from GlobalVariables
-            if let profilePicture = CurrentUserService.shared.user.profilePicture {
+            // Get profile picture from CurrentUserService
+            let user = CurrentUserService.shared.user
+            if let profilePicture = user.profilePicture {
+                print("📱 Using cached profile picture from CurrentUserService")
                 profileImageView.image = profilePicture
+            } else if let profilePicUrl = user.profilePictureUrl, !profilePicUrl.isEmpty {
+                print("📱 Loading profile picture from URL: \(profilePicUrl)")
+                // Set placeholder first
+                profileImageView.image = UIImage(named: "Do_NoProfilePic_User")
+                
+                // Load profile image from URL asynchronously
+                Task { [weak annotationView, weak mapView] in
+                    guard let annotationView = annotationView,
+                          let mapView = mapView else { return }
+                    
+                    if let image = await OptimizedMediaService.shared.loadImage(from: profilePicUrl) {
+                        await MainActor.run {
+                            // Find the image view by tag in the annotation view's subviews
+                            if let shadowContainer = annotationView.subviews.first,
+                               let imageView = shadowContainer.viewWithTag(999) as? UIImageView {
+                                imageView.image = image
+                                print("📱 ✅ Profile picture loaded and updated in avatar")
+                            } else {
+                                // Fallback: try to find it in any subview
+                                func findImageView(in view: UIView) -> UIImageView? {
+                                    if let imageView = view as? UIImageView, imageView.tag == 999 {
+                                        return imageView
+                                    }
+                                    for subview in view.subviews {
+                                        if let found = findImageView(in: subview) {
+                                            return found
+                                        }
+                                    }
+                                    return nil
+                                }
+                                
+                                if let imageView = findImageView(in: annotationView) {
+                                    imageView.image = image
+                                    print("📱 ✅ Profile picture loaded and updated in avatar (fallback)")
+                                }
+                            }
+                            
+                            // Also update CurrentUserService so it's cached for future use
+                            var updatedUser = CurrentUserService.shared.user
+                            updatedUser.profilePicture = image
+                            CurrentUserService.shared.updateUser(updatedUser)
+                            print("📱 ✅ Profile picture cached in CurrentUserService")
+                        }
+                    } else {
+                        print("📱 ⚠️ Failed to load profile picture from URL")
+                    }
+                }
             } else {
+                print("📱 No profile picture URL available, using default")
                 // Use default profile picture
                 profileImageView.image = UIImage(named: "Do_NoProfilePic_User")
             }
@@ -7661,6 +7800,20 @@ func session(_ session: WCSession, didReceiveMessage message: [String: Any], rep
             return
         }
         
+        // Handle requestActiveRunningWorkout - forward to RunTrackingEngine which handles it
+        if let type = message["type"] as? String, type == "requestActiveRunningWorkout" {
+            print("📱 OutdoorRunViewController: Forwarding requestActiveRunningWorkout to RunTrackingEngine")
+            self.runEngine.session(session, didReceiveMessage: message, replyHandler: replyHandler)
+            return
+        }
+        
+        // Handle active workout request from watch (WatchConnectivityManager format)
+        if let request = message["request"] as? String, request == "activeWorkout" {
+            print("📱 OutdoorRunViewController: Handling activeWorkout request from watch")
+            self.sendActiveWorkoutToWatch(directReplyHandler: replyHandler)
+            return
+        }
+        
         // Check if this is an outdoor run state change command - forward to RunTrackingEngine
         if let type = message["type"] as? String, type == "outdoorRunStateChange" {
             print("📱 OutdoorRunViewController: Forwarding outdoorRunStateChange message to RunTrackingEngine")
@@ -7670,19 +7823,16 @@ func session(_ session: WCSession, didReceiveMessage message: [String: Any], rep
             return
         }
         
-        // Handle other message types that OutdoorRunViewController should process
+        // Handle legacy requestWorkout format
         if let _ = message["requestWorkout"] as? Bool {
             // Watch is requesting active workout data
             self.sendActiveWorkoutToWatch(directReplyHandler: replyHandler)
             return
         }
         
-        // Default response for unhandled messages
-        let response: [String: Any] = [
-            "status": "received",
-            "timestamp": Date().timeIntervalSince1970
-        ]
-        replyHandler(response)
+        // Forward unhandled messages to RunTrackingEngine to see if it can handle them
+        print("📱 OutdoorRunViewController: Forwarding unhandled message to RunTrackingEngine")
+        self.runEngine.session(session, didReceiveMessage: message, replyHandler: replyHandler)
     }
 }
     
@@ -7835,35 +7985,73 @@ func session(_ session: WCSession, didReceiveMessage message: [String: Any], rep
     }
     
     public func sendActiveWorkoutToWatch(replyTo message: [String: Any]? = nil, directReplyHandler: (([String: Any]) -> Void)? = nil) {
+        print("📱 OutdoorRunViewController: Preparing active workout response for watch")
+        print("   - runState: \(runEngine.runState.rawValue)")
+        print("   - runType: \(runType.rawValue)")
+        print("   - isWatchTracking: \(runEngine.isWatchTracking)")
+        
         var response: [String: Any] = [
             "dashboardMode": false,
             "isWatchTracking": runEngine.isWatchTracking
         ]
         
-        // Add workout data if we're in an active workout
-        if runEngine.runState != .notStarted {
+        // Check if we have an active workout (running or paused)
+        let hasActiveWorkout = runEngine.runState == .running || runEngine.runState == .paused
+        
+        if hasActiveWorkout {
+            print("📱 ✅ Found active workout, sending data to watch")
+            response["hasActiveWorkout"] = true
             response["workoutActive"] = true
-            response["workoutType"] = runType.rawValue
+            response["workoutType"] = "running"
+            response["runType"] = runType.rawValue
+            response["id"] = runEngine.workoutId.uuidString
+            response["state"] = runEngine.runState == .running ? "inProgress" : (runEngine.runState == .paused ? "paused" : "notStarted")
             response["runState"] = runEngine.runState.rawValue
             response["elapsedTime"] = runEngine.elapsedTime
+            response["isIndoorMode"] = runEngine.isIndoorMode
             
             // Add metrics
-            let metrics = metricsCoordinator?.prepareMetricsForSync() ?? [:]
+            let metrics: [String: Any] = [
+                "distance": runEngine.distance.value,
+                "pace": runEngine.pace.value,
+                "calories": runEngine.calories,
+                "heartRate": runEngine.heartRate,
+                "cadence": runEngine.cadence
+            ]
             response["metrics"] = metrics
             
-            // Add data about primary sources for metrics
+            // Add coordination flags - who is primary for each metric
+            response["isPrimaryForDistance"] = runEngine.isPrimaryForDistance
+            response["isPrimaryForPace"] = runEngine.isPrimaryForPace
+            response["isPrimaryForHeartRate"] = runEngine.isPrimaryForHeartRate
+            response["isPrimaryForCalories"] = runEngine.isPrimaryForCalories
+            response["isPrimaryForCadence"] = runEngine.isPrimaryForCadence
+            response["hasGoodLocationData"] = runEngine.hasGoodLocationData
+            
+            // Add data about primary sources for metrics (for compatibility)
             response["primaryMetricSources"] = [
-                "distance": runEngine.isWatchTracking ? "watch" : "phone",
-                "pace": runEngine.isWatchTracking ? "watch" : "phone",
-                "hr": runEngine.isWatchTracking ? "watch" : "phone",
-                "calories": runEngine.isWatchTracking ? "watch" : "phone"
+                "distance": runEngine.isPrimaryForDistance ? "phone" : "watch",
+                "pace": runEngine.isPrimaryForPace ? "phone" : "watch",
+                "hr": runEngine.isPrimaryForHeartRate ? "phone" : "watch",
+                "calories": runEngine.isPrimaryForCalories ? "phone" : "watch",
+                "cadence": runEngine.isPrimaryForCadence ? "phone" : "watch"
             ]
+            
+            // Also include metrics from coordinator if available
+            if let coordinatorMetrics = metricsCoordinator?.prepareMetricsForSync() {
+                response["coordinatorMetrics"] = coordinatorMetrics
+            }
         } else {
+            print("📱 ❌ No active workout found")
+            response["hasActiveWorkout"] = false
             response["workoutActive"] = false
+            response["state"] = "notStarted"
+            response["runState"] = "notStarted"
         }
         
         // Send the response
         if let replyHandler = directReplyHandler {
+            print("📱 Sending response via direct reply handler")
             replyHandler(response)
         } else if let messageId = message?["messageId"] as? String {
             // Include message ID in response for the watch to match request/response
@@ -7872,6 +8060,26 @@ func session(_ session: WCSession, didReceiveMessage message: [String: Any], rep
             // Send response as a new message
             WCSession.default.sendMessage(response, replyHandler: nil) { error in
                 print("❌ Error sending active workout response: \(error.localizedDescription)")
+            }
+        } else {
+            // Fallback: try to send via application context if no reply handler
+            let session = WCSession.default
+            guard session.activationState == .activated else {
+                print("⚠️ Cannot send active workout data - WCSession not activated")
+                return
+            }
+            
+            do {
+                try session.updateApplicationContext(response)
+                print("📱 ✅ Sent active workout data via application context")
+            } catch {
+                let nsError = error as NSError
+                print("❌ Error updating application context: \(error.localizedDescription)")
+                print("   Error code: \(nsError.code), domain: \(nsError.domain)")
+                if nsError.code == 7018 {
+                    print("   ⚠️ Watch thinks companion app is not installed")
+                    print("   💡 Try restarting the watch app or ensuring WCSession is activated")
+                }
             }
         }
     }

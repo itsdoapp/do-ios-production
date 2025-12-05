@@ -25,6 +25,7 @@ struct ExerciseSet: Identifiable {
 
 struct PostCellRenderer: View {
     let post: Post
+    var onDelete: ((String) -> Void)? = nil // Optional delete handler
     
     // Check if current user owns this post
     private var isOwnPost: Bool {
@@ -37,7 +38,8 @@ struct PostCellRenderer: View {
     
     @ViewBuilder
     var body: some View {
-        switch post.postType {
+        Group {
+            switch post.postType {
         case "post":
             // Standard post with image
             StandardPostCell(
@@ -317,7 +319,9 @@ struct PostCellRenderer: View {
                 userUsername: post.createdBy?.userName,
                 userProfileImageUrl: post.createdBy?.profilePictureUrl
             )
+            }
         }
+        .environment(\.postId, post.objectId)
     }
     
     // Helper to parse workout session report from attachment

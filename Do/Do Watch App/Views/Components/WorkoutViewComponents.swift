@@ -69,20 +69,20 @@ struct StatBox: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .font(.system(size: 8, weight: .bold, design: .rounded))
                 .foregroundColor(.gray)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(0.7)
             Text(value)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundColor(color)
-                .minimumScaleFactor(0.6)
+                .minimumScaleFactor(0.5)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
+        .padding(6)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 10)
                 .fill(Color.white.opacity(0.1))
                 .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
         )
@@ -100,9 +100,9 @@ struct HeroMetric: View {
     var body: some View {
         VStack(spacing: 0) {
             Text(value)
-                .font(.system(size: 40, weight: .bold, design: .rounded))
+                .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
-                .shadow(color: color.opacity(0.5), radius: 15, x: 0, y: 0)
+                .shadow(color: color.opacity(0.5), radius: 12, x: 0, y: 0)
                 .scaleEffect(pulseScale)
                 .minimumScaleFactor(0.5)
                 .lineLimit(1)
@@ -115,10 +115,10 @@ struct HeroMetric: View {
             
             if !unit.isEmpty {
                 Text(unit)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
                     .foregroundColor(color)
-                    .padding(.top, -4)
-                    .minimumScaleFactor(0.8)
+                    .padding(.top, -2)
+                    .minimumScaleFactor(0.7)
                     .lineLimit(1)
             }
         }

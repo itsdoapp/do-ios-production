@@ -9,6 +9,7 @@
 import UIKit
 import Combine
 import Foundation
+import SwiftUI
 
 // MARK: - NewWorkoutTrackingViewController
 
@@ -16,6 +17,7 @@ class NewWorkoutTrackingViewController: UIViewController {
     // MARK: - Properties
     private var session: workoutSession
     private var cancellables = Set<AnyCancellable>()
+    private let gymTracker = GymTrackingEngine.shared
     
     // Context flags
     var isStandaloneMovement = false
@@ -31,6 +33,9 @@ class NewWorkoutTrackingViewController: UIViewController {
     private var heartRate: Double = 0
     private var calories: Double = 0
     private var movements: [movement] = []
+    
+    // Set completion state
+    private var showingSetCompletion: movement? = nil
     
     // MARK: - UI Components
     private lazy var statsView: UIView = {
@@ -316,7 +321,91 @@ class NewWorkoutTrackingViewController: UIViewController {
     private func startWorkout() {
         startTime = Date()
         isPaused = false
+        
+        // Start workout in GymTrackingEngine
+        gymTracker.startWorkout(session: session)
+        
+        // Subscribe to gym tracker updates
+        gymTracker.$elapsedTime
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] elapsed in
+                self?.elapsedTime = elapsed
+                self?.updateTimerLabel()
+            }
+            .store(in: &cancellables)
+        
+        gymTracker.$heartRate
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] hr in
+                self?.heartRate = hr
+                if let heartRateLabel = self?.heartRateView.viewWithTag(100) as? UILabel {
+                    heartRateLabel.text = hr > 0 ? "\(Int(hr)) BPM" : "-- BPM"
+                }
+            }
+            .store(in: &cancellables)
+        
+        gymTracker.$totalCalories
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] cals in
+                self?.calories = cals
+                if let caloriesLabel = self?.caloriesView.arrangedSubviews.last as? UILabel {
+                    caloriesLabel.text = "\(Int(cals)) kcal"
+                }
+            }
+            .store(in: &cancellables)
+        
+        gymTracker.$completedSets
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                // Update movements with completed sets
+                self?.updateMovementsWithCompletedSets()
+                self?.movementsTableView.reloadData()
+            }
+            .store(in: &cancellables)
+        
         startTimer()
+    }
+    
+    private func updateMovementsWithCompletedSets() {
+        // Update movements array with completed sets from gymTracker
+        for (index, movement) in movements.enumerated() {
+            // Find completed sets for this movement
+            let movementCompletedSets = gymTracker.completedSets.filter { completedSet in
+                // Match by movement ID or name
+                return completedSet.id == movement.id || 
+                       (movement.firstSectionSets?.contains(where: { $0.id == completedSet.id }) ?? false) ||
+                       (movement.secondSectionSets?.contains(where: { $0.id == completedSet.id }) ?? false) ||
+                       (movement.weavedSets?.contains(where: { $0.id == completedSet.id }) ?? false) ||
+                       (movement.templateSets?.contains(where: { $0.id == completedSet.id }) ?? false)
+            }
+            
+            // Update sets in movement
+            if var firstSectionSets = movement.firstSectionSets {
+                for (setIndex, var set) in firstSectionSets.enumerated() {
+                    if let completedSet = movementCompletedSets.first(where: { $0.id == set.id }) {
+                        set.completed = completedSet.completed
+                        set.reps = completedSet.reps
+                        set.weight = completedSet.weight
+                        set.duration = completedSet.duration
+                        firstSectionSets[setIndex] = set
+                    }
+                }
+                movements[index].firstSectionSets = firstSectionSets
+            }
+            
+            if var templateSets = movement.templateSets {
+                for (setIndex, var set) in templateSets.enumerated() {
+                    if let completedSet = movementCompletedSets.first(where: { $0.id == set.id }) {
+                        set.completed = completedSet.completed
+                        set.reps = completedSet.reps
+                        set.weight = completedSet.weight
+                        set.duration = completedSet.duration
+                        templateSets[setIndex] = set
+                    }
+                }
+                movements[index].templateSets = templateSets
+            }
+        }
     }
     
     private func startTimer() {
@@ -342,8 +431,10 @@ class NewWorkoutTrackingViewController: UIViewController {
         
         if isPaused {
             timer?.invalidate()
+            gymTracker.pauseWorkout()
         } else {
             startTimer()
+            gymTracker.resumeWorkout()
         }
     }
     
@@ -365,6 +456,7 @@ class NewWorkoutTrackingViewController: UIViewController {
         })
         
         alert.addAction(UIAlertAction(title: "Discard Workout", style: .destructive) { [weak self] _ in
+            self?.gymTracker.stopWorkout()
             self?.dismiss(animated: true)
         })
         
@@ -380,8 +472,34 @@ class NewWorkoutTrackingViewController: UIViewController {
     }
     
     @objc private func addMovementButtonTapped() {
-        // TODO: Implement movement selector
-        print("Add movement tapped")
+        let selectVC = SelectMovementViewController()
+        selectVC.onMovementSelected = { [weak self] movement in
+            guard let self = self else { return }
+            
+            // Add movement to session
+            self.movements.append(movement)
+            
+            // Update session object
+            if self.session.movementsInSession == nil {
+                self.session.movementsInSession = []
+            }
+            self.session.movementsInSession?.append(movement)
+            
+            // Update gym tracker
+            self.gymTracker.updateCurrentMovement(movement)
+            
+            // Update UI
+            DispatchQueue.main.async {
+                self.movementsTableView.reloadData()
+                
+                // If this was the first movement, start the timer if not already started
+                if self.movements.count == 1 && self.startTime == nil {
+                    self.startWorkout()
+                }
+            }
+        }
+        
+        present(selectVC, animated: true)
     }
     
     @objc private func handleHeartRateUpdate(_ notification: Notification) {
@@ -397,10 +515,13 @@ class NewWorkoutTrackingViewController: UIViewController {
     
     // MARK: - Save Workout
     private func saveWorkout() {
-        guard let userId = CurrentUserService.shared.userID else {
+        guard let userId = UserIDResolver.shared.getBestUserIdForAPI() else {
             dismiss(animated: true)
             return
         }
+        
+        // Stop workout in gym tracker
+        gymTracker.stopWorkout()
         
         // session.id is always non-nil, but we use sessionId if available, otherwise fall back to id
         let sessionId = session.sessionId ?? session.id
@@ -408,10 +529,53 @@ class NewWorkoutTrackingViewController: UIViewController {
         let duration = elapsedTime
         let activityService = ActivityService.shared
         
+        // Calculate metrics - prefer gymTracker values, fallback to calculating from movements
+        var totalVolume: Double = 0
+        var totalSets: Int = 0
+        var totalReps: Int = 0
+        var totalWeight: Double = 0
+        
+        // Use gymTracker's completed sets for accurate metrics if available
+        if !gymTracker.completedSets.isEmpty {
+            totalSets = gymTracker.completedSets.count
+            totalReps = gymTracker.totalReps
+            totalVolume = gymTracker.totalVolume
+            
+            // Calculate totalWeight from completed sets
+            for completedSet in gymTracker.completedSets {
+                if let weight = completedSet.weight {
+                    totalWeight += weight
+                }
+            }
+        } else {
+            // Fallback: calculate from movements
+            for movement in movements {
+                let allSets = (movement.templateSets ?? []) + 
+                              (movement.firstSectionSets ?? []) + 
+                              (movement.secondSectionSets ?? []) + 
+                              (movement.weavedSets ?? [])
+                
+                for set in allSets {
+                    if set.completed {
+                        totalSets += 1
+                        let reps = set.reps ?? 0
+                        let weight = set.weight ?? 0
+                        totalReps += reps
+                        totalWeight += weight
+                        totalVolume += Double(reps) * weight
+                    }
+                }
+            }
+        }
+        
         activityService.saveSessionLog(
             userId: userId,
             originalSessionId: sessionId,
             duration: duration,
+            totalVolume: totalVolume,
+            totalSets: totalSets,
+            totalReps: totalReps,
+            totalWeight: totalWeight,
             completed: true,
             calories: calories > 0 ? calories : nil,
             notes: nil
@@ -442,15 +606,289 @@ extension NewWorkoutTrackingViewController: UITableViewDataSource, UITableViewDe
         let movement = movements[indexPath.row]
         
         cell.backgroundColor = .clear
-        cell.textLabel?.text = movement.movement1Name ?? "Movement"
-        cell.textLabel?.textColor = .white
         cell.selectionStyle = .none
+        
+        // Clear existing subviews
+        cell.contentView.subviews.forEach { $0.removeFromSuperview() }
+        
+        // Create container stack
+        let stackView = UIStackView()
+        stackView.axis = .vertical
+        stackView.spacing = 8
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Movement name
+        let nameLabel = UILabel()
+        nameLabel.text = movement.movement1Name ?? "Movement"
+        nameLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        nameLabel.textColor = .white
+        stackView.addArrangedSubview(nameLabel)
+        
+        // Set completion status
+        let allSets = (movement.templateSets ?? []) + 
+                      (movement.firstSectionSets ?? []) + 
+                      (movement.secondSectionSets ?? []) + 
+                      (movement.weavedSets ?? [])
+        let completedCount = allSets.filter { $0.completed }.count
+        let totalCount = allSets.count
+        
+        if totalCount > 0 {
+            let statusLabel = UILabel()
+            statusLabel.text = "\(completedCount)/\(totalCount) sets completed"
+            statusLabel.font = .systemFont(ofSize: 14)
+            statusLabel.textColor = completedCount == totalCount ? .systemGreen : UIColor.white.withAlphaComponent(0.6)
+            stackView.addArrangedSubview(statusLabel)
+        }
+        
+        cell.contentView.addSubview(stackView)
+        NSLayoutConstraint.activate([
+            stackView.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 12),
+            stackView.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 16),
+            stackView.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -16),
+            stackView.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -12)
+        ])
         
         return cell
     }
     
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        // TODO: Show movement detail/edit
+        let movement = movements[indexPath.row]
+        showingSetCompletion = movement
+        
+        // Get all sets for this movement
+        let allSets = (movement.templateSets ?? []) + 
+                      (movement.firstSectionSets ?? []) + 
+                      (movement.secondSectionSets ?? []) + 
+                      (movement.weavedSets ?? [])
+        
+        // Present set completion view
+        let setCompletionView = SetCompletionView(
+            movement: movement,
+            sets: allSets,
+            onSetCompleted: { [weak self] set, weight, reps, duration in
+                guard let self = self else { return }
+                
+                // Complete set in gym tracker
+                self.gymTracker.completeSet(
+                    movement: movement,
+                    set: set,
+                    weight: weight,
+                    reps: reps,
+                    duration: duration
+                )
+                
+                // Update current movement
+                self.gymTracker.updateCurrentMovement(movement)
+                
+                // Update local movements array
+                self.updateMovementsWithCompletedSets()
+                self.movementsTableView.reloadData()
+            },
+            onCancel: { [weak self] in
+                self?.showingSetCompletion = nil
+            }
+        )
+        
+        let hostingController = UIHostingController(rootView: setCompletionView)
+        hostingController.modalPresentationStyle = .pageSheet
+        if let sheet = hostingController.sheetPresentationController {
+            sheet.detents = [.medium(), .large()]
+            sheet.prefersGrabberVisible = true
+        }
+        
+        present(hostingController, animated: true)
+    }
+}
+
+// MARK: - Set Completion View
+
+struct SetCompletionView: View {
+    let movement: movement
+    let sets: [set]
+    let onSetCompleted: (set, Double?, Int?, TimeInterval?) -> Void
+    let onCancel: () -> Void
+    
+    @Environment(\.dismiss) var dismiss
+    @State private var currentSetIndex: Int = 0
+    @State private var setReps: Int = 0
+    @State private var setWeight: Double = 0
+    @State private var setDuration: Int = 0
+    
+    private var currentSet: set? {
+        guard currentSetIndex < sets.count else { return nil }
+        return sets[currentSetIndex]
+    }
+    
+    private var isTimed: Bool {
+        movement.isTimed
+    }
+    
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                gradient: Gradient(stops: [
+                    .init(color: Color(red: 0.05, green: 0.05, blue: 0.08), location: 0),
+                    .init(color: Color(red: 0.08, green: 0.08, blue: 0.12), location: 0.5),
+                    .init(color: Color(red: 0.1, green: 0.1, blue: 0.15), location: 1)
+                ]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .edgesIgnoringSafeArea(.all)
+            
+            VStack(spacing: 24) {
+                // Header
+                VStack(spacing: 8) {
+                    Text(movement.movement1Name ?? "Movement")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    if let name2 = movement.movement2Name, !name2.isEmpty {
+                        Text(name2)
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+                    
+                    Text("Set \(currentSetIndex + 1) of \(sets.count)")
+                        .font(.system(size: 14))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .padding(.top, 20)
+                
+                // Set Input
+                VStack(spacing: 20) {
+                    if isTimed {
+                        // Duration input
+                        VStack(spacing: 12) {
+                            Text("Duration (seconds)")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.8))
+                            
+                            Stepper(value: $setDuration, in: 0...3600, step: 5) {
+                                Text("\(setDuration)s")
+                                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(16)
+                        }
+                    } else {
+                        // Reps input
+                        VStack(spacing: 12) {
+                            Text("Reps")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.8))
+                            
+                            Stepper(value: $setReps, in: 0...100) {
+                                Text("\(setReps)")
+                                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(16)
+                        }
+                    }
+                    
+                    // Weight input
+                    VStack(spacing: 12) {
+                        Text("Weight (lbs)")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        Stepper(value: $setWeight, in: 0...1000, step: 5) {
+                            Text("\(Int(setWeight))")
+                                .font(.system(size: 36, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                        .padding()
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(16)
+                    }
+                }
+                .padding(.horizontal, 20)
+                
+                Spacer()
+                
+                // Action Buttons
+                HStack(spacing: 12) {
+                    Button(action: {
+                        if currentSetIndex > 0 {
+                            currentSetIndex -= 1
+                            loadSetValues()
+                        } else {
+                            onCancel()
+                            dismiss()
+                        }
+                    }) {
+                        Text(currentSetIndex > 0 ? "Previous" : "Cancel")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(16)
+                    }
+                    
+                    Button(action: {
+                        guard let set = currentSet else { return }
+                        
+                        let weight = setWeight > 0 ? setWeight : nil
+                        let reps = setReps > 0 ? setReps : nil
+                        let duration = isTimed && setDuration > 0 ? TimeInterval(setDuration) : nil
+                        
+                        onSetCompleted(set, weight, reps, duration)
+                        
+                        // Move to next set or dismiss
+                        if currentSetIndex < sets.count - 1 {
+                            currentSetIndex += 1
+                            loadSetValues()
+                        } else {
+                            dismiss()
+                        }
+                    }) {
+                        Text(currentSetIndex < sets.count - 1 ? "Next Set" : "Complete")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .background(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.125, green: 0.8, blue: 0.45),
+                                        Color(red: 0.125, green: 0.7, blue: 0.35)
+                                    ]),
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(16)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+        .onAppear {
+            loadSetValues()
+        }
+    }
+    
+    private func loadSetValues() {
+        guard let set = currentSet else { return }
+        
+        // Load existing values if set is already completed
+        setReps = set.reps ?? 0
+        setWeight = set.weight ?? 0
+        setDuration = set.duration ?? 0
+        
+        // If not completed, use template values
+        if !set.completed {
+            setReps = set.reps ?? 10
+            setWeight = set.weight ?? 0
+            setDuration = set.duration ?? 60
+        }
     }
 }
 

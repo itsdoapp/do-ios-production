@@ -82,6 +82,10 @@ class ModernHikeTrackerViewController: UIViewController, ObservableObject, CLLoc
     private var durationLabel: UILabel!
     private var caloriesLabel: UILabel!
     private var startStopButton: UIButton!
+    // Add a debouncing mechanism
+    private var preferencesDebounceTimer: Timer?
+    // Track previous preference values to detect actual changes
+    private var previousHikeType: HikeType?
     
 
     
@@ -1165,6 +1169,38 @@ struct HikeTrackerView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showRoutePreview) {
+            if let trail = selectedTrailForPreview {
+                RoutePreviewView(
+                    trail: trail,
+                    onSelectRoute: {
+                        // Handle route selection from preview
+                        DispatchQueue.main.async {
+                            self.showRoutePreview = false
+                        }
+                        
+                        // Create route from trail and select it
+                        let route = Route(
+                            id: UUID(uuidString: trail.id) ?? UUID(),
+                            name: trail.name,
+                            distance: trail.length * 1.60934,
+                            elevation: trail.elevationGain * 0.3048,
+                            difficulty: self.convertDifficulty(trail.difficulty.rawValue)
+                        )
+                        
+                        DispatchQueue.main.async {
+                            self.viewModel.selectRoute(route: route)
+                        }
+                    },
+                    onDismiss: {
+                        // Just close the preview
+                        showRoutePreview = false
+                    }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+        }
     }
     // MARK: - Background View
     private func backgroundView() -> some View {
@@ -2185,6 +2221,14 @@ extension ModernHikeTrackerViewController {
         }
         objectWillChange.send()
     }
+    
+    /// Directly select a route (without toggling)
+    func selectRoute(route: Route) {
+        self.selectedRoute = route
+        print("✅ Selected route: \(route.name ?? "Unnamed")")
+        // Notify observers that the route changed
+        self.objectWillChange.send()
+    }
 
     /// Start a hike using the current selection
     @objc func startHike() {
@@ -2394,10 +2438,7 @@ extension ModernHikeTrackerViewController {
         )
     }
     
-    // Add a debouncing mechanism
-    private var preferencesDebounceTimer: Timer?
-    // Track previous preference values to detect actual changes
-    private var previousHikeType: HikeType?
+
     
     @objc private func userPreferencesDidChange() {
         // Check if the actual preference key changed before processing
